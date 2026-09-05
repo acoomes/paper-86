@@ -347,7 +347,7 @@ function updateCamera() {
 
 function render() {
     // Clear
-    ctx.fillStyle = '#f5f1e8';
+    ctx.fillStyle = '#f3e6c9';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
     // Apply camera transform
@@ -358,7 +358,7 @@ function render() {
     drawTrack();
     
     // Draw tire marks
-    ctx.strokeStyle = 'rgba(42, 42, 42, 0.3)';
+    ctx.strokeStyle = 'rgba(42, 36, 28, 0.3)';
     ctx.lineWidth = 3;
     tireMarks.forEach(mark => {
         ctx.globalAlpha = mark.alpha;
@@ -376,8 +376,8 @@ function render() {
     // Draw cones
     cones.forEach(cone => {
         if (!cone.hit) {
-            ctx.fillStyle = '#ff6b35';
-            ctx.strokeStyle = '#2c2c2c';
+            ctx.fillStyle = '#d4773d';
+            ctx.strokeStyle = '#2a241c';
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.arc(cone.x, cone.y, 12, 0, Math.PI * 2);
@@ -394,7 +394,7 @@ function render() {
 
 function drawTrack() {
     // Draw track surface
-    ctx.strokeStyle = '#2c2c2c';
+    ctx.strokeStyle = '#2a241c';
     ctx.lineWidth = trackWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -408,7 +408,7 @@ function drawTrack() {
     ctx.stroke();
     
     // Draw track fill
-    ctx.strokeStyle = '#e8e4d8';
+    ctx.strokeStyle = '#ded4b8';
     ctx.lineWidth = trackWidth - 8;
     
     ctx.beginPath();
@@ -420,7 +420,7 @@ function drawTrack() {
     ctx.stroke();
     
     // Draw center line
-    ctx.strokeStyle = 'rgba(44, 44, 44, 0.2)';
+    ctx.strokeStyle = 'rgba(42, 36, 28, 0.2)';
     ctx.lineWidth = 2;
     ctx.setLineDash([10, 10]);
     
@@ -440,8 +440,8 @@ function drawCar() {
     ctx.rotate(car.angle);
     
     // Car body - simple 86 coupe silhouette
-    ctx.fillStyle = '#2c2c2c';
-    ctx.strokeStyle = '#1a1a1a';
+    ctx.fillStyle = '#2a241c';
+    ctx.strokeStyle = '#2a241c';
     ctx.lineWidth = 2;
     
     // Main body
@@ -457,7 +457,7 @@ function drawCar() {
     ctx.stroke();
     
     // Windshield
-    ctx.fillStyle = '#4a4a4a';
+    ctx.fillStyle = '#5c5348';
     ctx.beginPath();
     ctx.moveTo(-7, -10);
     ctx.lineTo(-7, -2);
@@ -467,7 +467,7 @@ function drawCar() {
     ctx.fill();
     
     // Hood detail
-    ctx.strokeStyle = '#1a1a1a';
+    ctx.strokeStyle = '#2a241c';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, -18);
@@ -480,7 +480,7 @@ function drawCar() {
 function updateHUD() {
     document.getElementById('time-display').textContent = timeLeft.toFixed(1);
     document.getElementById('score-display').textContent = Math.floor(score);
-    document.getElementById('combo-display').textContent = combo > 0 ? `x${combo} COMBO!` : '';
+    document.getElementById('combo-display').textContent = combo > 0 ? `x${combo}` : '';
 }
 
 function gameLoop() {
