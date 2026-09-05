@@ -1,11 +1,13 @@
-/* Color palette - edit these for Studio restyling */
+/* Paper-craft color palette */
 :root {
-    --paper-cream: #f5f1e8;
-    --graphite: #2c2c2c;
-    --ink-black: #1a1a1a;
-    --orange-cone: #ff6b35;
-    --tire-mark: rgba(42, 42, 42, 0.3);
-    --hud-border: #3a3a3a;
+    --paper-cream: #f3e6c9;
+    --graphite: #5c5348;
+    --ink-black: #2a241c;
+    --orange-cone: #d4773d;
+    --tire-mark: rgba(42, 36, 28, 0.3);
+    --hud-border: #8b1e1e;
+    --rule: #c4b089;
+    --stamp-red: #8b1e1e;
 }
 
 * {
@@ -15,7 +17,7 @@
 }
 
 body {
-    font-family: 'Courier New', monospace;
+    font-family: Georgia, 'Palatino Linotype', Palatino, serif;
     background: var(--paper-cream);
     color: var(--graphite);
     overflow: hidden;
@@ -52,8 +54,18 @@ body {
 #hud-left, #hud-right {
     background: var(--paper-cream);
     padding: 12px 16px;
-    border: 2px solid var(--hud-border);
+    border: 2px solid var(--stamp-red);
     min-width: 120px;
+    font-family: 'Courier New', Courier, monospace;
+    transform: rotate(-1deg);
+}
+
+#hud-left {
+    transform: rotate(0.5deg);
+}
+
+#hud-right {
+    transform: rotate(-0.8deg);
 }
 
 #hud-center {
@@ -64,23 +76,25 @@ body {
 
 .wordmark {
     font-size: 28px;
-    font-weight: bold;
-    letter-spacing: 4px;
-    color: var(--graphite);
-    text-shadow: 2px 2px 0 rgba(0,0,0,0.1);
+    font-weight: normal;
+    letter-spacing: 0.25em;
+    color: var(--ink-black);
+    text-shadow: none;
 }
 
 .hud-label {
     font-size: 11px;
     letter-spacing: 2px;
     margin-bottom: 4px;
-    opacity: 0.7;
+    color: var(--stamp-red);
+    font-weight: bold;
 }
 
 .hud-value {
     font-size: 24px;
     font-weight: bold;
     letter-spacing: 1px;
+    color: var(--ink-black);
 }
 
 .combo-text {
@@ -161,7 +175,7 @@ body {
     margin-top: 20px;
     font-size: 14px;
     letter-spacing: 1px;
-    opacity: 0.7;
+    color: var(--graphite);
 }
 
 #mobile-controls {
