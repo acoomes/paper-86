@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>PAPER 86</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-container">
+        <div id="hud">
+            <div id="hud-left">
+                <div class="hud-label">TIME</div>
+                <div id="time-display" class="hud-value">60.0</div>
+            </div>
+            <div id="hud-center">
+                <div class="wordmark">PAPER 86</div>
+            </div>
+            <div id="hud-right">
+                <div class="hud-label">SCORE</div>
+                <div id="score-display" class="hud-value">0</div>
+                <div id="combo-display" class="combo-text"></div>
+            </div>
+        </div>
+        
+        <canvas id="game-canvas"></canvas>
+        
+        <div id="end-screen" class="hidden">
+            <div class="end-content">
+                <h1 class="end-title">TIME'S UP</h1>
+                <div class="end-scores">
+                    <div class="score-row">
+                        <span class="score-label">FINAL SCORE</span>
+                        <span id="final-score" class="score-value">0</span>
+                    </div>
+                    <div class="score-row">
+                        <span class="score-label">BEST</span>
+                        <span id="best-score" class="score-value">0</span>
+                    </div>
+                </div>
+                <div class="end-hint">Press R or tap to replay</div>
+            </div>
+        </div>
+        
+        <!-- Mobile controls -->
+        <div id="mobile-controls" class="hidden">
+            <div id="drift-button">HOLD TO DRIFT</div>
+        </div>
+    </div>
+    
+    <script src="game.js"></script>
+</body>
+</html>

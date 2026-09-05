@@ -1,0 +1,11 @@
+{
+  "name": "paper-86",
+  "version": "1.0.0",
+  "description": "60-second top-down drift score attack",
+  "scripts": {
+    "start": "npx serve"
+  },
+  "keywords": ["game", "drift", "canvas", "racing"],
+  "author": "",
+  "license": "ISC"
+}
