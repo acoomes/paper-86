@@ -10,6 +10,7 @@ let bestScore = parseInt(localStorage.getItem('paper86-best') || '0');
 let timeLeft = 60;
 let combo = 0;
 let lastConeTime = 0;
+let collisionGraceTime = 0.8; // Grace period after start/restart
 
 // Input state
 const keys = {};
@@ -18,11 +19,11 @@ let touchDrifting = false;
 
 // Car state
 const car = {
-    x: 400,
-    y: 600,
+    x: 475,
+    y: 725,
     vx: 0,
     vy: 0,
-    angle: -Math.PI / 2, // facing up
+    angle: Math.atan2(700 - 750, 350 - 600), // ~-2.944, pointing along track
     speed: 0,
     driftAngle: 0,
     width: 20,
@@ -63,13 +64,13 @@ const trackPoints = [
 
 // Generate cones at strategic points
 const cones = [
-    { x: 550, y: 225, hit: false },
-    { x: 820, y: 320, hit: false },
-    { x: 780, y: 550, hit: false },
-    { x: 520, y: 720, hit: false },
-    { x: 280, y: 600, hit: false },
-    { x: 240, y: 380, hit: false },
-    { x: 320, y: 260, hit: false }
+    { x: 550, y: 225, hit: false, respawnTimer: 0 },
+    { x: 820, y: 320, hit: false, respawnTimer: 0 },
+    { x: 780, y: 550, hit: false, respawnTimer: 0 },
+    { x: 520, y: 720, hit: false, respawnTimer: 0 },
+    { x: 280, y: 600, hit: false, respawnTimer: 0 },
+    { x: 240, y: 380, hit: false, respawnTimer: 0 },
+    { x: 320, y: 260, hit: false, respawnTimer: 0 }
 ];
 
 // Initialize
@@ -139,15 +140,19 @@ function restart() {
     score = 0;
     timeLeft = 60;
     combo = 0;
-    car.x = 400;
-    car.y = 600;
+    collisionGraceTime = 0.8;
+    car.x = 475;
+    car.y = 725;
     car.vx = 0;
     car.vy = 0;
-    car.angle = -Math.PI / 2;
+    car.angle = Math.atan2(700 - 750, 350 - 600);
     car.speed = 0;
     car.driftAngle = 0;
     tireMarks.length = 0;
-    cones.forEach(cone => cone.hit = false);
+    cones.forEach(cone => {
+        cone.hit = false;
+        cone.respawnTimer = 0;
+    });
     document.getElementById('end-screen').classList.add('hidden');
     lastConeTime = Date.now();
 }
@@ -244,9 +249,9 @@ function updateCar(dt) {
 }
 
 function checkCollisions() {
-    // Check if car is on track
-    if (!isOnTrack(car.x, car.y)) {
-        endGame();
+    // Check if car is on track (only after grace period)
+    if (collisionGraceTime <= 0 && !isOnTrack(car.x, car.y)) {
+        endGame('crash');
     }
 }
 
@@ -285,9 +290,19 @@ function checkCones() {
     const now = Date.now();
     const coneRadius = 15;
     const comboWindow = 3000; // 3 seconds to maintain combo
+    const respawnTime = 2000; // 2 seconds to respawn
     
     cones.forEach((cone, idx) => {
-        if (cone.hit) return;
+        if (cone.hit) {
+            // Respawn timer
+            if (!cone.respawnTimer) {
+                cone.respawnTimer = now;
+            } else if (now - cone.respawnTimer > respawnTime) {
+                cone.hit = false;
+                cone.respawnTimer = 0;
+            }
+            return;
+        }
         
         const dist = Math.hypot(car.x - cone.x, car.y - cone.y);
         if (dist < coneRadius + car.width / 2) {
@@ -304,13 +319,17 @@ function checkCones() {
     }
 }
 
-function endGame() {
+function endGame(reason = 'timeout') {
     gameState = 'ended';
     
     if (score > bestScore) {
         bestScore = Math.floor(score);
         localStorage.setItem('paper86-best', bestScore.toString());
     }
+    
+    // Update end card title based on reason
+    const endTitle = document.querySelector('.end-title');
+    endTitle.textContent = reason === 'crash' ? 'CRASH' : "TIME'S UP";
     
     document.getElementById('final-score').textContent = Math.floor(score);
     document.getElementById('best-score').textContent = bestScore;
@@ -472,7 +491,12 @@ function gameLoop() {
         timeLeft -= dt;
         if (timeLeft <= 0) {
             timeLeft = 0;
-            endGame();
+            endGame('timeout');
+        }
+        
+        // Update collision grace
+        if (collisionGraceTime > 0) {
+            collisionGraceTime -= dt;
         }
         
         updateCar(dt);
