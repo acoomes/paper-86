@@ -1,11 +1,13 @@
-# paper-86
+# PAPER 86
 
-60-second top-down drift game. Thread the cones, leave ink trails, chase your best lap.
+60-second drift score attack. Thread the cones, leave ink trails.
 
-## Play
+**Play:** https://paper-86.vercel.app
 
-Open `index.html` in your browser.
+## Controls
 
-Arrow keys or A/D to steer. Hold Space (or click) to drift. Walls end the run.
+- **Arrow keys** or **A/D** to steer
+- **Hold Space** (or click/tap) to drift
+- Walls end the run
 
-High scores saved locally.
+High score saved locally in your browser.

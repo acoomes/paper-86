@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>PAPER 86</title>
+    <meta name="description" content="60-second drift score attack. Thread the cones, leave ink trails.">
+    <meta name="theme-color" content="#f3e6c9">
+    <meta property="og:title" content="PAPER 86">
+    <meta property="og:description" content="60-second drift score attack. Thread the cones, leave ink trails.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://paper-86.vercel.app">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -28,10 +34,12 @@
         
         <div id="end-screen" class="hidden">
             <div class="end-content">
-                <h1 class="end-title">TIME'S UP</h1>
+                <div class="end-stamp">
+                    <h1 class="end-title">TIME'S UP</h1>
+                </div>
                 <div class="end-scores">
                     <div class="score-row">
-                        <span class="score-label">FINAL SCORE</span>
+                        <span class="score-label">FINAL</span>
                         <span id="final-score" class="score-value">0</span>
                     </div>
                     <div class="score-row">
@@ -39,7 +47,15 @@
                         <span id="best-score" class="score-value">0</span>
                     </div>
                 </div>
-                <div class="end-hint">Press R or tap to replay</div>
+                <div id="new-best-badge" class="new-best hidden">NEW BEST</div>
+                <div class="end-hint">R or tap to replay</div>
+            </div>
+        </div>
+        
+        <!-- First-run instructions -->
+        <div id="start-hint" class="hidden">
+            <div class="start-hint-content">
+                <div class="start-hint-text">ARROW KEYS STEER · SPACE TO DRIFT</div>
             </div>
         </div>
         

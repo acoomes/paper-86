@@ -11,6 +11,7 @@ let timeLeft = 60;
 let combo = 0;
 let lastConeTime = 0;
 let collisionGraceTime = 0.8; // Grace period after start/restart
+let firstRun = !localStorage.getItem('paper86-played');
 
 // Input state
 const keys = {};
@@ -78,6 +79,11 @@ function init() {
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
     
+    // Show start hint on first run (desktop only)
+    if (firstRun && !('ontouchstart' in window)) {
+        document.getElementById('start-hint').classList.remove('hidden');
+    }
+    
     // Keyboard controls
     window.addEventListener('keydown', (e) => {
         keys[e.key.toLowerCase()] = true;
@@ -87,6 +93,13 @@ function init() {
         }
         if (e.key.toLowerCase() === 'r' && gameState === 'ended') {
             restart();
+        }
+        
+        // Hide start hint on first key press
+        if (firstRun) {
+            document.getElementById('start-hint').classList.add('hidden');
+            localStorage.setItem('paper86-played', 'true');
+            firstRun = false;
         }
     });
     
@@ -322,8 +335,11 @@ function checkCones() {
 function endGame(reason = 'timeout') {
     gameState = 'ended';
     
-    if (score > bestScore) {
-        bestScore = Math.floor(score);
+    const finalScore = Math.floor(score);
+    const isNewBest = finalScore > bestScore;
+    
+    if (isNewBest) {
+        bestScore = finalScore;
         localStorage.setItem('paper86-best', bestScore.toString());
     }
     
@@ -331,8 +347,17 @@ function endGame(reason = 'timeout') {
     const endTitle = document.querySelector('.end-title');
     endTitle.textContent = reason === 'crash' ? 'CRASH' : "TIME'S UP";
     
-    document.getElementById('final-score').textContent = Math.floor(score);
+    document.getElementById('final-score').textContent = finalScore;
     document.getElementById('best-score').textContent = bestScore;
+    
+    // Show new best badge
+    const newBestBadge = document.getElementById('new-best-badge');
+    if (isNewBest && finalScore > 0) {
+        newBestBadge.classList.remove('hidden');
+    } else {
+        newBestBadge.classList.add('hidden');
+    }
+    
     document.getElementById('end-screen').classList.remove('hidden');
 }
 
@@ -346,9 +371,17 @@ function updateCamera() {
 }
 
 function render() {
-    // Clear
+    // Clear with paper background
     ctx.fillStyle = '#f3e6c9';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Subtle paper texture (very light noise)
+    if (Math.random() > 0.97) {
+        ctx.fillStyle = 'rgba(92, 83, 72, 0.015)';
+        const x = Math.random() * canvas.width;
+        const y = Math.random() * canvas.height;
+        ctx.fillRect(x, y, 2, 2);
+    }
     
     // Apply camera transform
     ctx.save();
