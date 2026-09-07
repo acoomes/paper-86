@@ -17,6 +17,8 @@ let firstRun = !localStorage.getItem('paper86-played');
 const keys = {};
 let drifting = false;
 let touchDrifting = false;
+let touchSteerLeft = false;
+let touchSteerRight = false;
 
 // Car state
 const car = {
@@ -141,6 +143,39 @@ function init() {
         e.preventDefault();
         touchDrifting = false;
     });
+    driftButton.addEventListener('pointercancel', (e) => {
+        e.preventDefault();
+        touchDrifting = false;
+    });
+    
+    // Mobile steer buttons
+    const leftButton = document.getElementById('left-button');
+    leftButton.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        touchSteerLeft = true;
+    });
+    leftButton.addEventListener('pointerup', (e) => {
+        e.preventDefault();
+        touchSteerLeft = false;
+    });
+    leftButton.addEventListener('pointercancel', (e) => {
+        e.preventDefault();
+        touchSteerLeft = false;
+    });
+    
+    const rightButton = document.getElementById('right-button');
+    rightButton.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        touchSteerRight = true;
+    });
+    rightButton.addEventListener('pointerup', (e) => {
+        e.preventDefault();
+        touchSteerRight = false;
+    });
+    rightButton.addEventListener('pointercancel', (e) => {
+        e.preventDefault();
+        touchSteerRight = false;
+    });
     
     // Show mobile controls on touch devices
     if ('ontouchstart' in window) {
@@ -185,8 +220,8 @@ function updateCar(dt) {
     
     // Steering
     let steerInput = 0;
-    if (keys['arrowleft'] || keys['a']) steerInput -= 1;
-    if (keys['arrowright'] || keys['d']) steerInput += 1;
+    if (keys['arrowleft'] || keys['a'] || touchSteerLeft) steerInput -= 1;
+    if (keys['arrowright'] || keys['d'] || touchSteerRight) steerInput += 1;
     
     // Acceleration (always accelerating forward)
     const accel = ACCELERATION;
