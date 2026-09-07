@@ -123,6 +123,14 @@ function init() {
         touchDrifting = false;
     });
     
+    // End screen tap to restart
+    const endScreen = document.getElementById('end-screen');
+    endScreen.addEventListener('pointerdown', () => {
+        if (gameState === 'ended') {
+            restart();
+        }
+    });
+    
     // Mobile drift button
     const driftButton = document.getElementById('drift-button');
     driftButton.addEventListener('pointerdown', (e) => {
