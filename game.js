@@ -38,14 +38,14 @@ const car = {
 };
 
 // Physics constants
-const ACCELERATION = 0.3;
-const MAX_SPEED = 8;
+const ACCELERATION = 0.18;
+const MAX_SPEED = 5.0;
 const FRICTION = 0.97;
 const TURN_SPEED = 0.06;
 const DRIFT_TURN_SPEED = 0.09;
 const DRIFT_FRICTION = 0.94;
 const GRIP_FRICTION = 0.88;
-const DRIFT_SPEED_BLEED = 0.96; // Speed loss while drifting
+const DRIFT_SPEED_BLEED = 0.97; // Speed loss while drifting
 const SLIP_RECOVERY_TIME = 0.2; // Time to snap velocity to heading
 
 // Camera
@@ -555,7 +555,7 @@ function checkCones() {
             addClipPopup(cone.x, cone.y, combo);
         }
         // Check for near-miss CLIP (threading while drifting)
-        else if (!cone.clipped && isDrifting && Math.abs(car.slipAngle) > 0.2 && car.speed > 3 && dist < nearMissRadius) {
+        else if (!cone.clipped && isDrifting && Math.abs(car.slipAngle) > 0.2 && car.speed > 2.5 && dist < nearMissRadius) {
             cone.clipped = true;
             cone.clipResetTimer = now;
             combo++;
