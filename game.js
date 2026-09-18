@@ -11,7 +11,7 @@ let timeLeft = 60;
 let combo = 0;
 let lastConeTime = 0;
 let lastClipTime = 0;
-let collisionGraceTime = 2.5; // Grace period after start/restart
+let collisionGraceTime = 2.0; // Grace period after start/restart
 let firstRun = !localStorage.getItem('paper86-played');
 let screenShake = { x: 0, y: 0, intensity: 0 };
 
@@ -28,8 +28,8 @@ const car = {
     y: 725,
     vx: 0,
     vy: 0,
-    heading: Math.atan2(700 - 750, 350 - 600), // Car's facing direction
-    velocityAngle: Math.atan2(700 - 750, 350 - 600), // Direction of movement
+    heading: -2.8, // Heading toward track ahead
+    velocityAngle: -2.8,
     speed: 0,
     slipAngle: 0,
     slipRecoveryTimer: 0,
@@ -225,7 +225,7 @@ function startGame() {
     gameState = 'playing';
     localStorage.setItem('paper86-played', 'true');
     firstRun = false;
-    collisionGraceTime = 2.5; // Reset grace period
+    collisionGraceTime = 2.0; // Reset grace period
 }
 
 function restart() {
@@ -233,13 +233,13 @@ function restart() {
     score = 0;
     timeLeft = 60;
     combo = 0;
-    collisionGraceTime = 2.5;
+    collisionGraceTime = 2.0;
     car.x = 475;
     car.y = 725;
     car.vx = 0;
     car.vy = 0;
-    car.heading = Math.atan2(700 - 750, 350 - 600);
-    car.velocityAngle = car.heading;
+    car.heading = -2.8;
+    car.velocityAngle = -2.8;
     car.speed = 0;
     car.slipAngle = 0;
     car.slipRecoveryTimer = 0;
