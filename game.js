@@ -11,7 +11,7 @@ let timeLeft = 60;
 let combo = 0;
 let lastConeTime = 0;
 let lastClipTime = 0;
-let collisionGraceTime = 0.8; // Grace period after start/restart
+let collisionGraceTime = 2.5; // Grace period after start/restart
 let firstRun = !localStorage.getItem('paper86-played');
 let screenShake = { x: 0, y: 0, intensity: 0 };
 
@@ -225,7 +225,7 @@ function startGame() {
     gameState = 'playing';
     localStorage.setItem('paper86-played', 'true');
     firstRun = false;
-    document.getElementById('start-card').classList.add('hidden');
+    collisionGraceTime = 2.5; // Reset grace period
 }
 
 function restart() {
@@ -233,7 +233,7 @@ function restart() {
     score = 0;
     timeLeft = 60;
     combo = 0;
-    collisionGraceTime = 0.8;
+    collisionGraceTime = 2.5;
     car.x = 475;
     car.y = 725;
     car.vx = 0;
