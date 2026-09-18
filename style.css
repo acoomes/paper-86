@@ -267,34 +267,6 @@ body {
     color: var(--orange-cone);
 }
 
-/* Start hint */
-#start-hint {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 15;
-    pointer-events: none;
-}
-
-#start-hint.hidden {
-    display: none;
-}
-
-.start-hint-content {
-    background: var(--paper-cream);
-    border: 2px solid var(--stamp-red);
-    padding: 16px 24px;
-    box-shadow: 0 4px 12px rgba(42, 36, 28, 0.15);
-}
-
-.start-hint-text {
-    font-size: 13px;
-    letter-spacing: 2px;
-    color: var(--ink-black);
-    font-family: 'Courier New', Courier, monospace;
-}
-
 /* Mobile adjustments */
 @media (max-width: 768px) {
     .wordmark {
@@ -327,9 +299,5 @@ body {
     
     .score-value {
         font-size: 26px;
-    }
-    
-    #start-hint {
-        display: none !important;
     }
 }
