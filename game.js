@@ -660,12 +660,27 @@ function render() {
     
     // Draw CLIP popups
     clipPopups.forEach(popup => {
+        ctx.save();
+        ctx.translate(popup.x, popup.y);
+        ctx.rotate((Math.random() - 0.5) * 0.08);
+        
         ctx.globalAlpha = popup.alpha;
-        ctx.fillStyle = '#8b1e1e';
-        ctx.font = 'bold 16px "Courier New", monospace';
+        ctx.font = 'bold 15px "Courier New", monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(popup.text, popup.x, popup.y);
+        ctx.letterSpacing = '0.15em';
+        
+        // Cream outline for readability on kraft
+        ctx.strokeStyle = '#f3e6c9';
+        ctx.lineWidth = 3;
+        ctx.strokeText(popup.text, 0, 0);
+        
+        // Stamp-red fill
+        ctx.fillStyle = '#8b1e1e';
+        ctx.fillText(popup.text, 0, 0);
+        
+        ctx.letterSpacing = '0px';
+        ctx.restore();
     });
     ctx.globalAlpha = 1;
     
@@ -700,10 +715,10 @@ function drawGhost() {
     
     if (!ghostPoint) return;
     
-    // Draw ghost trail (dashed line from recent positions)
-    ctx.strokeStyle = 'rgba(139, 30, 30, 0.2)';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([5, 8]);
+    // Draw softer ghost trail (lighter, finer dash)
+    ctx.strokeStyle = 'rgba(139, 30, 30, 0.15)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 10]);
     ctx.beginPath();
     
     let drawnPoints = 0;
@@ -721,16 +736,16 @@ function drawGhost() {
     ctx.stroke();
     ctx.setLineDash([]);
     
-    // Draw ghost car
+    // Draw ghost car - clearer silhouette but still faint
     ctx.save();
-    ctx.globalAlpha = 0.3;
+    ctx.globalAlpha = 0.35;
     ctx.translate(ghostPoint.x, ghostPoint.y);
     ctx.rotate(ghostPoint.heading);
     
+    // Softer red fill
     ctx.fillStyle = '#8b1e1e';
-    ctx.strokeStyle = '#8b1e1e';
-    ctx.lineWidth = 1;
     
+    // Main body
     ctx.beginPath();
     ctx.moveTo(-8, -14);
     ctx.lineTo(-8, 8);
@@ -741,55 +756,98 @@ function drawGhost() {
     ctx.closePath();
     ctx.fill();
     
+    // Lighter windshield detail for depth
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = '#5c5348';
+    ctx.beginPath();
+    ctx.moveTo(-6, -8);
+    ctx.lineTo(-6, -2);
+    ctx.lineTo(6, -2);
+    ctx.lineTo(6, -8);
+    ctx.closePath();
+    ctx.fill();
+    
     ctx.restore();
 }
 
 function drawStartCard() {
-    // Draw translucent overlay
     ctx.save();
     ctx.resetTransform();
-    ctx.fillStyle = 'rgba(243, 230, 201, 0.95)';
+    
+    // Semi-transparent kraft overlay
+    ctx.fillStyle = 'rgba(243, 230, 201, 0.92)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
-    // Center card
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
     
-    // Wordmark
+    // Stamp-paper card frame
+    ctx.save();
+    ctx.translate(centerX, centerY - 20);
+    ctx.rotate(-0.01);
+    
+    const cardWidth = 340;
+    const cardHeight = 280;
+    const cardX = -cardWidth / 2;
+    const cardY = -cardHeight / 2;
+    
+    // Cream card fill
+    ctx.fillStyle = '#f3e6c9';
+    ctx.fillRect(cardX, cardY, cardWidth, cardHeight);
+    
+    // Double stamp-red border (outer)
+    ctx.strokeStyle = '#8b1e1e';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(cardX, cardY, cardWidth, cardHeight);
+    
+    // Inset border
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cardX + 8, cardY + 8, cardWidth - 16, cardHeight - 16);
+    
+    // PAPER 86 wordmark
     ctx.fillStyle = '#2a241c';
-    ctx.font = '48px Georgia, serif';
+    ctx.font = '42px Georgia, serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.letterSpacing = '0.15em';
-    ctx.fillText('PAPER 86', centerX, centerY - 100);
+    ctx.letterSpacing = '0.25em';
+    ctx.fillText('PAPER 86', 0, -85);
+    ctx.letterSpacing = '0px';
     
-    // Pitch
-    ctx.font = '16px Georgia, serif';
+    // Quiet pitch
+    ctx.font = '13px Georgia, serif';
     ctx.fillStyle = '#5c5348';
-    ctx.fillText('60-second drift score attack', centerX, centerY - 50);
+    ctx.fillText('60s drift attack', 0, -50);
     
-    // Controls box
-    ctx.strokeStyle = '#8b1e1e';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(centerX - 150, centerY - 10, 300, 80);
-    
-    ctx.font = 'bold 14px "Courier New", monospace';
+    // Controls - tighter, mobile-aware
+    ctx.font = '12px "Courier New", monospace';
     ctx.fillStyle = '#2a241c';
-    ctx.fillText('STEER: ARROWS / A+D', centerX, centerY + 10);
-    ctx.fillText('DRIFT: HOLD SPACE', centerX, centerY + 35);
+    const isMobile = 'ontouchstart' in window;
+    if (isMobile) {
+        ctx.fillText('Tap buttons to steer + drift', 0, -10);
+    } else {
+        ctx.fillText('Arrows steer · Space drifts', 0, -10);
+    }
     
-    // Best score
+    // Thread the cones hint
+    ctx.font = '11px Georgia, serif';
+    ctx.fillStyle = '#5c5348';
+    ctx.fillText('Thread the cones', 0, 20);
+    
+    // BEST line (stamp-red Courier when present)
     if (bestScore > 0) {
-        ctx.font = '18px "Courier New", monospace';
+        ctx.font = 'bold 16px "Courier New", monospace';
         ctx.fillStyle = '#8b1e1e';
-        ctx.fillText(`BEST: ${bestScore}`, centerX, centerY + 100);
+        ctx.letterSpacing = '0.1em';
+        ctx.fillText(`BEST  ${bestScore}`, 0, 65);
+        ctx.letterSpacing = '0px';
     }
     
     // Start hint
-    ctx.font = 'italic 14px Georgia, serif';
+    ctx.font = '12px Georgia, serif';
     ctx.fillStyle = '#5c5348';
-    ctx.fillText('Press Space or tap to start', centerX, centerY + 140);
+    ctx.fillText(isMobile ? 'Tap to start' : 'Space or tap to start', 0, 105);
     
+    ctx.restore();
     ctx.restore();
 }
 
