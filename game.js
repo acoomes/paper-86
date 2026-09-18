@@ -136,20 +136,100 @@ function init() {
         }
     });
     
-    // Touch/mouse controls for drift and start
+    // Prevent context menu on the game container
+    const gameContainer = document.getElementById('game-container');
+    gameContainer.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+    });
+    
+    // Track active touches for half-screen controls
+    const activeTouches = new Map();
+    
+    // Half-screen touch controls for mobile
     canvas.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        
         if (gameState === 'ready') {
             startGame();
+            return;
         } else if (gameState === 'ended') {
             restart();
+            return;
         } else if (gameState === 'playing') {
-            touchDrifting = true;
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const halfWidth = rect.width / 2;
+            
+            const touchData = {
+                side: x < halfWidth ? 'left' : 'right',
+                startTime: Date.now()
+            };
+            
+            activeTouches.set(e.pointerId, touchData);
+            updateTouchState();
         }
     });
     
-    canvas.addEventListener('pointerup', () => {
-        touchDrifting = false;
+    canvas.addEventListener('pointermove', (e) => {
+        if (gameState === 'playing' && activeTouches.has(e.pointerId)) {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const halfWidth = rect.width / 2;
+            
+            const touchData = activeTouches.get(e.pointerId);
+            touchData.side = x < halfWidth ? 'left' : 'right';
+            updateTouchState();
+        }
     });
+    
+    canvas.addEventListener('pointerup', (e) => {
+        activeTouches.delete(e.pointerId);
+        updateTouchState();
+    });
+    
+    canvas.addEventListener('pointercancel', (e) => {
+        activeTouches.delete(e.pointerId);
+        updateTouchState();
+    });
+    
+    // Update touch state based on active touches
+    function updateTouchState() {
+        let hasLeft = false;
+        let hasRight = false;
+        let hasAnyTouch = false;
+        
+        for (const [id, data] of activeTouches) {
+            hasAnyTouch = true;
+            if (data.side === 'left') {
+                hasLeft = true;
+            } else {
+                hasRight = true;
+            }
+        }
+        
+        // Set steering state
+        touchSteerLeft = hasLeft && !hasRight;
+        touchSteerRight = hasRight && !hasLeft;
+        
+        // If both sides are touched or multi-touch, use the most recent
+        if (hasLeft && hasRight) {
+            let latestTouch = null;
+            let latestTime = 0;
+            for (const [id, data] of activeTouches) {
+                if (data.startTime > latestTime) {
+                    latestTime = data.startTime;
+                    latestTouch = data;
+                }
+            }
+            if (latestTouch) {
+                touchSteerLeft = latestTouch.side === 'left';
+                touchSteerRight = latestTouch.side === 'right';
+            }
+        }
+        
+        // Drift when any touch is active (hold to drift)
+        touchDrifting = hasAnyTouch;
+    }
     
     // End screen tap to restart
     const endScreen = document.getElementById('end-screen');
@@ -158,59 +238,6 @@ function init() {
             restart();
         }
     });
-    
-    // Mobile drift button
-    const driftButton = document.getElementById('drift-button');
-    driftButton.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        if (gameState === 'ready') {
-            startGame();
-        } else if (gameState === 'playing') {
-            touchDrifting = true;
-        }
-    });
-    driftButton.addEventListener('pointerup', (e) => {
-        e.preventDefault();
-        touchDrifting = false;
-    });
-    driftButton.addEventListener('pointercancel', (e) => {
-        e.preventDefault();
-        touchDrifting = false;
-    });
-    
-    // Mobile steer buttons
-    const leftButton = document.getElementById('left-button');
-    leftButton.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        touchSteerLeft = true;
-    });
-    leftButton.addEventListener('pointerup', (e) => {
-        e.preventDefault();
-        touchSteerLeft = false;
-    });
-    leftButton.addEventListener('pointercancel', (e) => {
-        e.preventDefault();
-        touchSteerLeft = false;
-    });
-    
-    const rightButton = document.getElementById('right-button');
-    rightButton.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        touchSteerRight = true;
-    });
-    rightButton.addEventListener('pointerup', (e) => {
-        e.preventDefault();
-        touchSteerRight = false;
-    });
-    rightButton.addEventListener('pointercancel', (e) => {
-        e.preventDefault();
-        touchSteerRight = false;
-    });
-    
-    // Show mobile controls on touch devices
-    if ('ontouchstart' in window) {
-        document.getElementById('mobile-controls').classList.remove('hidden');
-    }
     
     gameLoop();
 }
@@ -824,7 +851,7 @@ function drawStartCard() {
     ctx.fillStyle = '#2a241c';
     const isMobile = 'ontouchstart' in window;
     if (isMobile) {
-        ctx.fillText('Tap buttons to steer + drift', 0, -10);
+        ctx.fillText('Hold left / right half to steer · hold to drift', 0, -10);
     } else {
         ctx.fillText('Arrows steer · Space drifts', 0, -10);
     }

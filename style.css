@@ -27,6 +27,9 @@ body {
     align-items: center;
     justify-content: center;
     touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
 }
 
 #game-container {
@@ -37,6 +40,10 @@ body {
     max-height: 800px;
     display: flex;
     flex-direction: column;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
 }
 
 #hud {
@@ -111,6 +118,10 @@ body {
     background: var(--paper-cream);
     cursor: crosshair;
     image-rendering: auto;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
 }
 
 #end-screen {
@@ -212,16 +223,7 @@ body {
 }
 
 #mobile-controls {
-    position: absolute;
-    bottom: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 10;
-    touch-action: none;
-}
-
-#mobile-controls.hidden {
-    display: none;
+    display: none !important;
 }
 
 .steer-controls {
