@@ -28,8 +28,8 @@ const car = {
     y: 725,
     vx: 0,
     vy: 0,
-    heading: -2.8, // Heading toward track ahead
-    velocityAngle: -2.8,
+    heading: Math.atan2(700 - 750, 350 - 600), // ~-2.944, pointing along track
+    velocityAngle: Math.atan2(700 - 750, 350 - 600),
     speed: 0,
     slipAngle: 0,
     slipRecoveryTimer: 0,
@@ -238,8 +238,8 @@ function restart() {
     car.y = 725;
     car.vx = 0;
     car.vy = 0;
-    car.heading = -2.8;
-    car.velocityAngle = -2.8;
+    car.heading = Math.atan2(700 - 750, 350 - 600);
+    car.velocityAngle = car.heading;
     car.speed = 0;
     car.slipAngle = 0;
     car.slipRecoveryTimer = 0;
@@ -328,19 +328,16 @@ function updateCar(dt) {
         car.vx *= FRICTION;
         car.vy *= FRICTION;
         
-        if (Math.abs(slipAngle) > 0.05) {
-            // Gradually snap velocity to heading
-            car.slipRecoveryTimer += dt;
-            const recoveryProgress = Math.min(car.slipRecoveryTimer / SLIP_RECOVERY_TIME, 1);
-            const snapFactor = recoveryProgress * 0.3;
-            
+        if (Math.abs(slipAngle) > 0.05 && car.speed > 0.5) {
+            // Strongly align velocity to heading when not drifting (grip mode)
+            const gripFactor = 0.85;
             const targetVx = Math.cos(car.heading) * car.speed;
             const targetVy = Math.sin(car.heading) * car.speed;
-            car.vx += (targetVx - car.vx) * snapFactor;
-            car.vy += (targetVy - car.vy) * snapFactor;
-        } else {
-            car.slipRecoveryTimer = 0;
+            car.vx += (targetVx - car.vx) * gripFactor;
+            car.vy += (targetVy - car.vy) * gripFactor;
         }
+        
+        car.slipRecoveryTimer = 0;
     }
     
     // Limit max speed
