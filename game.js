@@ -450,7 +450,8 @@ function addClipPopup(x, y, comboCount) {
         y,
         text: comboCount > 1 ? `x${comboCount}` : 'CLIP',
         life: 1.2,
-        alpha: 1
+        alpha: 1,
+        rotation: (Math.random() - 0.5) * 0.08
     });
 }
 
@@ -662,7 +663,7 @@ function render() {
     clipPopups.forEach(popup => {
         ctx.save();
         ctx.translate(popup.x, popup.y);
-        ctx.rotate((Math.random() - 0.5) * 0.08);
+        ctx.rotate(popup.rotation);
         
         ctx.globalAlpha = popup.alpha;
         ctx.font = 'bold 15px "Courier New", monospace';
