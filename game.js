@@ -38,8 +38,8 @@ const car = {
 };
 
 // Physics constants
-const ACCELERATION = 0.025;
-const MAX_SPEED = 4.5;
+const ACCELERATION = 0.10;
+const MAX_SPEED = 4.75;
 const FRICTION = 0.97;
 const TURN_SPEED = 0.06;
 const DRIFT_TURN_SPEED = 0.09;
@@ -555,7 +555,7 @@ function checkCones() {
             addClipPopup(cone.x, cone.y, combo);
         }
         // Check for near-miss CLIP (threading while drifting)
-        else if (!cone.clipped && isDrifting && Math.abs(car.slipAngle) > 0.2 && car.speed > 2.14 && dist < nearMissRadius) {
+        else if (!cone.clipped && isDrifting && Math.abs(car.slipAngle) > 0.2 && car.speed > 2.32 && dist < nearMissRadius) {
             cone.clipped = true;
             cone.clipResetTimer = now;
             combo++;
