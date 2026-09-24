@@ -1,4 +1,4 @@
-// Paper 86 v2 - 60-second drift racing game
+// Paper 86 v3 - 60-second drift racing game
 // Canvas and game state
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
@@ -14,6 +14,15 @@ let lastClipTime = 0;
 let collisionGraceTime = 2.0; // Grace period after start/restart
 let firstRun = !localStorage.getItem('paper86-played');
 let screenShake = { x: 0, y: 0, intensity: 0 };
+let currentLayout = 0;
+let comboDecayWarning = false;
+
+// Audio state
+let audioContext = null;
+let audioMuted = localStorage.getItem('paper86-muted') === 'true';
+let driftOscillator = null;
+let driftGain = null;
+let driftFilter = null;
 
 // Input state
 const keys = {};
@@ -70,6 +79,168 @@ const GHOST_SAMPLE_RATE = 0.1; // Record every 0.1 seconds
 // CLIP popups
 const clipPopups = [];
 
+// Audio functions
+function initAudioContext() {
+    if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+}
+
+function playSound(type, comboCount = 0) {
+    if (audioMuted || !audioContext) return;
+    
+    const now = audioContext.currentTime;
+    
+    if (type === 'clip') {
+        // CLIP blip that rises in pitch with combo
+        const osc = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        
+        osc.connect(gain);
+        gain.connect(audioContext.destination);
+        
+        const baseFreq = 400 + (comboCount * 50);
+        osc.frequency.setValueAtTime(baseFreq, now);
+        
+        gain.gain.setValueAtTime(0.08, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+        
+        osc.start(now);
+        osc.stop(now + 0.15);
+    } else if (type === 'wall') {
+        // Wall hit - harsh burst
+        const osc = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        
+        osc.connect(gain);
+        gain.connect(audioContext.destination);
+        
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(100, now);
+        osc.frequency.exponentialRampToValueAtTime(50, now + 0.2);
+        
+        gain.gain.setValueAtTime(0.15, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+        
+        osc.start(now);
+        osc.stop(now + 0.2);
+    } else if (type === 'start') {
+        // Start cue - rising tone
+        const osc = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        
+        osc.connect(gain);
+        gain.connect(audioContext.destination);
+        
+        osc.frequency.setValueAtTime(300, now);
+        osc.frequency.exponentialRampToValueAtTime(600, now + 0.3);
+        
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+        
+        osc.start(now);
+        osc.stop(now + 0.3);
+    } else if (type === 'end') {
+        // End cue - falling tone
+        const osc = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        
+        osc.connect(gain);
+        gain.connect(audioContext.destination);
+        
+        osc.frequency.setValueAtTime(600, now);
+        osc.frequency.exponentialRampToValueAtTime(200, now + 0.5);
+        
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+        
+        osc.start(now);
+        osc.stop(now + 0.5);
+    } else if (type === 'combo-break') {
+        // Combo break - descending chirp
+        const osc = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        
+        osc.connect(gain);
+        gain.connect(audioContext.destination);
+        
+        osc.frequency.setValueAtTime(800, now);
+        osc.frequency.exponentialRampToValueAtTime(200, now + 0.25);
+        
+        gain.gain.setValueAtTime(0.06, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+        
+        osc.start(now);
+        osc.stop(now + 0.25);
+    }
+}
+
+function startDriftSound() {
+    if (audioMuted || !audioContext || driftOscillator) return;
+    
+    const now = audioContext.currentTime;
+    
+    // Create noise buffer for tire hiss
+    const bufferSize = audioContext.sampleRate * 2;
+    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+    }
+    
+    driftOscillator = audioContext.createBufferSource();
+    driftOscillator.buffer = buffer;
+    driftOscillator.loop = true;
+    
+    // Low-pass filter for tire hiss character
+    driftFilter = audioContext.createBiquadFilter();
+    driftFilter.type = 'lowpass';
+    driftFilter.frequency.setValueAtTime(1200, now);
+    driftFilter.Q.setValueAtTime(0.5, now);
+    
+    driftGain = audioContext.createGain();
+    
+    driftOscillator.connect(driftFilter);
+    driftFilter.connect(driftGain);
+    driftGain.connect(audioContext.destination);
+    
+    driftGain.gain.setValueAtTime(0, now);
+    driftGain.gain.linearRampToValueAtTime(0.035, now + 0.1);
+    
+    driftOscillator.start(now);
+}
+
+function stopDriftSound() {
+    if (!driftOscillator || !audioContext) return;
+    
+    const now = audioContext.currentTime;
+    driftGain.gain.linearRampToValueAtTime(0, now + 0.1);
+    
+    setTimeout(() => {
+        if (driftOscillator) {
+            driftOscillator.stop();
+            driftOscillator = null;
+            driftGain = null;
+            driftFilter = null;
+        }
+    }, 150);
+}
+
+function toggleMute() {
+    audioMuted = !audioMuted;
+    localStorage.setItem('paper86-muted', audioMuted.toString());
+    
+    if (audioMuted && driftOscillator) {
+        stopDriftSound();
+    }
+    
+    // Update mute button
+    const muteBtn = document.getElementById('mute-button');
+    if (muteBtn) {
+        muteBtn.textContent = audioMuted ? '🔇' : '🔊';
+    }
+}
+
 // Track definition - closed circuit with curves
 const trackWidth = 200;
 const trackPoints = [
@@ -83,29 +254,102 @@ const trackPoints = [
     { x: 250, y: 300 }
 ];
 
-// Generate cones at strategic threading points
-const cones = [
-    { x: 520, y: 230, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
-    { x: 750, y: 270, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
-    { x: 870, y: 480, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
-    { x: 780, y: 620, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
-    { x: 560, y: 740, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
-    { x: 320, y: 670, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
-    { x: 220, y: 450, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
-    { x: 270, y: 320, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
-    { x: 330, y: 240, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 }
+// Cone layouts - hand-made patterns for variety
+const coneLayouts = [
+    // Layout 0: Gates and pairs
+    [
+        { x: 500, y: 220, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 540, y: 220, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 730, y: 260, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 770, y: 280, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 870, y: 430, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 880, y: 490, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 820, y: 600, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 780, y: 640, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 600, y: 735, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 540, y: 750, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 360, y: 690, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 300, y: 670, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 200, y: 470, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 220, y: 420, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 260, y: 310, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 290, y: 330, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 320, y: 235, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 350, y: 245, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 }
+    ],
+    // Layout 1: Slalom style
+    [
+        { x: 480, y: 210, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 560, y: 230, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 680, y: 250, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 780, y: 290, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 860, y: 380, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 890, y: 470, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 870, y: 550, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 800, y: 620, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 700, y: 700, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 580, y: 750, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 340, y: 700, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 280, y: 660, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 250, y: 620, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 200, y: 510, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 210, y: 400, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 250, y: 310, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 310, y: 250, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 380, y: 220, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 }
+    ],
+    // Layout 2: Tight threading lines
+    [
+        { x: 520, y: 225, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 540, y: 235, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 560, y: 225, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 740, y: 265, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 760, y: 280, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 850, y: 420, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 880, y: 450, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 890, y: 490, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 820, y: 610, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 790, y: 630, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 620, y: 745, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 580, y: 750, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 540, y: 745, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 340, y: 680, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 310, y: 670, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 210, y: 450, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 270, y: 310, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 280, y: 330, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 330, y: 240, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 }
+    ]
 ];
+
+// Initialize with random layout
+currentLayout = Math.floor(Math.random() * coneLayouts.length);
+let cones = JSON.parse(JSON.stringify(coneLayouts[currentLayout]));
 
 // Initialize
 function init() {
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
     
+    // Initialize audio context on first user interaction
+    const initAudio = () => {
+        if (!audioContext) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+    };
+    
     // Load ghost from localStorage
     const savedGhost = localStorage.getItem('paper86-ghost');
     if (savedGhost) {
         try {
-            ghostPlayback = JSON.parse(savedGhost);
+            const ghostData = JSON.parse(savedGhost);
+            if (ghostData.recording) {
+                // New format with layout
+                ghostPlayback = ghostData.recording;
+            } else {
+                // Old format, just array
+                ghostPlayback = ghostData;
+            }
         } catch (e) {
             ghostPlayback = [];
         }
@@ -117,6 +361,7 @@ function init() {
         
         if (e.key.toLowerCase() === ' ') {
             e.preventDefault();
+            initAudio();
             if (gameState === 'ready') {
                 startGame();
             } else if (gameState === 'playing') {
@@ -125,7 +370,12 @@ function init() {
         }
         
         if (e.key.toLowerCase() === 'r' && gameState === 'ended') {
+            initAudio();
             restart();
+        }
+        
+        if (e.key.toLowerCase() === 'm') {
+            toggleMute();
         }
     });
     
@@ -148,6 +398,7 @@ function init() {
     // Half-screen touch controls for mobile
     canvas.addEventListener('pointerdown', (e) => {
         e.preventDefault();
+        initAudio();
         
         if (gameState === 'ready') {
             startGame();
@@ -233,11 +484,68 @@ function init() {
     
     // End screen tap to restart
     const endScreen = document.getElementById('end-screen');
-    endScreen.addEventListener('pointerdown', () => {
+    endScreen.addEventListener('pointerdown', (e) => {
+        // Don't restart if clicking share button
+        if (e.target.id === 'share-button') {
+            return;
+        }
         if (gameState === 'ended') {
             restart();
         }
     });
+    
+    // Mute button
+    const muteBtn = document.getElementById('mute-button');
+    muteBtn.textContent = audioMuted ? '🔇' : '🔊';
+    muteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleMute();
+    });
+    
+    // Share button
+    const shareBtn = document.getElementById('share-button');
+    shareBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        
+        const finalScore = Math.floor(score);
+        const shareText = `I scored ${finalScore} in PAPER 86! 🏎️\nBest: ${bestScore}\n\nPlay: https://paper-86.vercel.app`;
+        
+        // Try native share API
+        if (navigator.share) {
+            try {
+                await navigator.share({
+                    text: shareText
+                });
+            } catch (err) {
+                // User cancelled or error
+                if (err.name !== 'AbortError') {
+                    console.error('Share failed:', err);
+                    fallbackCopy(shareText, shareBtn);
+                }
+            }
+        } else {
+            // Fallback to clipboard
+            fallbackCopy(shareText, shareBtn);
+        }
+    });
+    
+    function fallbackCopy(text, button) {
+        navigator.clipboard.writeText(text).then(() => {
+            const originalText = button.textContent;
+            button.textContent = 'COPIED!';
+            button.classList.add('copied');
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.classList.remove('copied');
+            }, 2000);
+        }).catch(err => {
+            console.error('Copy failed:', err);
+            button.textContent = 'COPY FAILED';
+            setTimeout(() => {
+                button.textContent = 'SHARE SCORE';
+            }, 2000);
+        });
+    }
     
     gameLoop();
 }
@@ -253,6 +561,7 @@ function startGame() {
     localStorage.setItem('paper86-played', 'true');
     firstRun = false;
     collisionGraceTime = 2.0; // Reset grace period
+    playSound('start');
 }
 
 function restart() {
@@ -260,6 +569,7 @@ function restart() {
     score = 0;
     timeLeft = 60;
     combo = 0;
+    comboDecayWarning = false;
     collisionGraceTime = 2.0;
     car.x = 475;
     car.y = 725;
@@ -276,21 +586,28 @@ function restart() {
     ghostRecording = [];
     recordingTimer = 0;
     screenShake = { x: 0, y: 0, intensity: 0 };
-    cones.forEach(cone => {
-        cone.hit = false;
-        cone.respawnTimer = 0;
-        cone.clipped = false;
-        cone.clipResetTimer = 0;
-    });
+    
+    // Pick new layout
+    currentLayout = Math.floor(Math.random() * coneLayouts.length);
+    cones = JSON.parse(JSON.stringify(coneLayouts[currentLayout]));
+    
     document.getElementById('end-screen').classList.add('hidden');
     lastConeTime = Date.now();
     lastClipTime = Date.now();
+    playSound('start');
 }
 
 function updateCar(dt) {
     if (gameState !== 'playing') return;
     
     const isDrifting = drifting || touchDrifting;
+    
+    // Handle drift sound
+    if (isDrifting && car.speed > 2 && !driftOscillator) {
+        startDriftSound();
+    } else if ((!isDrifting || car.speed <= 2) && driftOscillator) {
+        stopDriftSound();
+    }
     
     // Steering input
     let steerInput = 0;
@@ -444,8 +761,17 @@ function updateClipPopups(dt) {
     for (let i = clipPopups.length - 1; i >= 0; i--) {
         const popup = clipPopups[i];
         popup.life -= dt;
-        popup.y -= 40 * dt; // Float upward
-        popup.alpha = Math.min(1, popup.life / 0.3);
+        popup.y -= 50 * dt; // Float upward faster
+        
+        // Scale animation: grow then shrink
+        const lifeRatio = popup.life / 1.5;
+        if (lifeRatio > 0.8) {
+            popup.scale = 1 + (1 - lifeRatio) * 5; // Grow
+        } else {
+            popup.scale = 1 + Math.sin(lifeRatio * Math.PI) * 0.2; // Bounce
+        }
+        
+        popup.alpha = Math.min(1, popup.life / 0.4);
         
         if (popup.life <= 0) {
             clipPopups.splice(i, 1);
@@ -471,14 +797,15 @@ function spawnParticles(x, y, count, color) {
     }
 }
 
-function addClipPopup(x, y, comboCount) {
+function addClipPopup(x, y, comboCount, text = 'CLIP') {
     clipPopups.push({
         x,
         y,
-        text: comboCount > 1 ? `x${comboCount}` : 'CLIP',
-        life: 1.2,
+        text: comboCount > 1 ? `${text} x${comboCount}` : text,
+        life: 1.5,
         alpha: 1,
-        rotation: (Math.random() - 0.5) * 0.08
+        rotation: (Math.random() - 0.5) * 0.08,
+        scale: 1
     });
 }
 
@@ -486,6 +813,7 @@ function checkCollisions() {
     // Check if car is on track (only after grace period)
     if (collisionGraceTime <= 0 && !isOnTrack(car.x, car.y)) {
         screenShake.intensity = 15;
+        playSound('wall');
         endGame('crash');
     }
 }
@@ -551,8 +879,10 @@ function checkCones() {
             combo++;
             score += 100 * combo;
             lastConeTime = now;
-            spawnParticles(cone.x, cone.y, 8, '#d4773d');
-            addClipPopup(cone.x, cone.y, combo);
+            spawnParticles(cone.x, cone.y, 12, '#d4773d');
+            addClipPopup(cone.x, cone.y, combo, 'HIT');
+            playSound('clip', combo);
+            screenShake.intensity = 3;
         }
         // Check for near-miss CLIP (threading while drifting)
         else if (!cone.clipped && isDrifting && Math.abs(car.slipAngle) > 0.2 && car.speed > 2.32 && dist < nearMissRadius) {
@@ -563,8 +893,10 @@ function checkCones() {
             score += clipScore;
             lastConeTime = now;
             lastClipTime = now;
-            spawnParticles(cone.x, cone.y, 5, '#f3e6c9');
-            addClipPopup(cone.x, cone.y, combo);
+            spawnParticles(cone.x, cone.y, 8, '#f3e6c9');
+            addClipPopup(cone.x, cone.y, combo, 'CLIP');
+            playSound('clip', combo);
+            screenShake.intensity = 2;
         }
         
         // Reset clipped status after a short time
@@ -575,13 +907,30 @@ function checkCones() {
     });
     
     // Check if combo should be dropped
-    if (combo > 0 && now - lastConeTime > comboWindow) {
-        combo = 0;
+    const timeSinceLastCone = now - lastConeTime;
+    if (combo > 0) {
+        if (timeSinceLastCone > comboWindow) {
+            // Combo broke
+            playSound('combo-break');
+            screenShake.intensity = 4;
+            combo = 0;
+            comboDecayWarning = false;
+        } else if (timeSinceLastCone > comboWindow * 0.7 && !comboDecayWarning) {
+            // Warning that combo is about to break
+            comboDecayWarning = true;
+        } else if (timeSinceLastCone < comboWindow * 0.7) {
+            comboDecayWarning = false;
+        }
     }
 }
 
 function endGame(reason = 'timeout') {
     gameState = 'ended';
+    playSound('end');
+    
+    if (driftOscillator) {
+        stopDriftSound();
+    }
     
     const finalScore = Math.floor(score);
     const isNewBest = finalScore > bestScore;
@@ -590,9 +939,13 @@ function endGame(reason = 'timeout') {
         bestScore = finalScore;
         localStorage.setItem('paper86-best', bestScore.toString());
         
-        // Save ghost recording
+        // Save ghost recording with layout
         if (ghostRecording.length > 0) {
-            localStorage.setItem('paper86-ghost', JSON.stringify(ghostRecording));
+            const ghostData = {
+                layout: currentLayout,
+                recording: ghostRecording
+            };
+            localStorage.setItem('paper86-ghost', JSON.stringify(ghostData));
             ghostPlayback = [...ghostRecording];
         }
     }
@@ -691,16 +1044,17 @@ function render() {
         ctx.save();
         ctx.translate(popup.x, popup.y);
         ctx.rotate(popup.rotation);
+        ctx.scale(popup.scale, popup.scale);
         
         ctx.globalAlpha = popup.alpha;
-        ctx.font = 'bold 15px "Courier New", monospace';
+        ctx.font = 'bold 18px "Courier New", monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.letterSpacing = '0.15em';
         
         // Cream outline for readability on kraft
         ctx.strokeStyle = '#f3e6c9';
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 4;
         ctx.strokeText(popup.text, 0, 0);
         
         // Stamp-red fill
@@ -718,6 +1072,11 @@ function render() {
     // Draw start card
     if (gameState === 'ready') {
         drawStartCard();
+    }
+    
+    // Draw combo meter (when playing and combo > 0)
+    if (gameState === 'playing' && combo > 0) {
+        drawComboMeter();
     }
     
     ctx.restore();
@@ -876,6 +1235,40 @@ function drawStartCard() {
     ctx.fillText(isMobile ? 'Tap to start' : 'Space or tap to start', 0, 105);
     
     ctx.restore();
+    ctx.restore();
+}
+
+function drawComboMeter() {
+    ctx.save();
+    ctx.resetTransform();
+    
+    const now = Date.now();
+    const timeSinceLastCone = now - lastConeTime;
+    const comboWindow = 3000;
+    const remainingTime = Math.max(0, comboWindow - timeSinceLastCone);
+    const progress = remainingTime / comboWindow;
+    
+    const centerX = canvas.width / 2;
+    const meterY = canvas.height - 80;
+    const meterWidth = 200;
+    const meterHeight = 12;
+    
+    // Background
+    ctx.fillStyle = 'rgba(42, 36, 28, 0.3)';
+    ctx.fillRect(centerX - meterWidth / 2, meterY, meterWidth, meterHeight);
+    
+    // Progress bar
+    const barColor = comboDecayWarning ? '#d4773d' : '#8b1e1e';
+    ctx.fillStyle = barColor;
+    ctx.fillRect(centerX - meterWidth / 2, meterY, meterWidth * progress, meterHeight);
+    
+    // Combo text above meter
+    ctx.font = 'bold 20px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillStyle = '#2a241c';
+    ctx.fillText(`x${combo} COMBO`, centerX, meterY - 8);
+    
     ctx.restore();
 }
 
