@@ -60,15 +60,16 @@ body {
 }
 
 .mute-btn {
-    position: absolute;
-    top: 20px;
-    right: 20px;
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
     background: var(--paper-cream);
     border: 2px solid var(--stamp-red);
     padding: 8px 12px;
     font-size: 18px;
     cursor: pointer;
     pointer-events: all;
+    z-index: 100;
     transform: rotate(-0.5deg);
     transition: transform 0.1s;
 }
@@ -342,8 +343,8 @@ body {
     }
     
     .mute-btn {
-        top: 10px;
-        right: 10px;
+        bottom: 10px;
+        left: 10px;
         padding: 6px 10px;
         font-size: 16px;
     }

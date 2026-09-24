@@ -22,6 +22,7 @@ let audioContext = null;
 let audioMuted = localStorage.getItem('paper86-muted') === 'true';
 let driftOscillator = null;
 let driftGain = null;
+let driftFilter = null;
 
 // Input state
 const keys = {};
@@ -179,17 +180,32 @@ function startDriftSound() {
     
     const now = audioContext.currentTime;
     
-    driftOscillator = audioContext.createOscillator();
+    // Create noise buffer for tire hiss
+    const bufferSize = audioContext.sampleRate * 2;
+    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+    }
+    
+    driftOscillator = audioContext.createBufferSource();
+    driftOscillator.buffer = buffer;
+    driftOscillator.loop = true;
+    
+    // Low-pass filter for tire hiss character
+    driftFilter = audioContext.createBiquadFilter();
+    driftFilter.type = 'lowpass';
+    driftFilter.frequency.setValueAtTime(1200, now);
+    driftFilter.Q.setValueAtTime(0.5, now);
+    
     driftGain = audioContext.createGain();
     
-    driftOscillator.connect(driftGain);
+    driftOscillator.connect(driftFilter);
+    driftFilter.connect(driftGain);
     driftGain.connect(audioContext.destination);
     
-    driftOscillator.type = 'sawtooth';
-    driftOscillator.frequency.setValueAtTime(80, now);
-    
     driftGain.gain.setValueAtTime(0, now);
-    driftGain.gain.linearRampToValueAtTime(0.04, now + 0.1);
+    driftGain.gain.linearRampToValueAtTime(0.035, now + 0.1);
     
     driftOscillator.start(now);
 }
@@ -205,6 +221,7 @@ function stopDriftSound() {
             driftOscillator.stop();
             driftOscillator = null;
             driftGain = null;
+            driftFilter = null;
         }
     }, 150);
 }
@@ -272,8 +289,8 @@ const coneLayouts = [
         { x: 800, y: 620, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
         { x: 700, y: 700, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
         { x: 580, y: 750, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
-        { x: 450, y: 740, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
         { x: 340, y: 700, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
+        { x: 280, y: 660, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
         { x: 250, y: 620, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
         { x: 200, y: 510, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
         { x: 210, y: 400, hit: false, respawnTimer: 0, clipped: false, clipResetTimer: 0 },
