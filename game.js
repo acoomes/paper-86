@@ -322,9 +322,9 @@ const coneLayouts = [
     ]
 ];
 
-// Initialize with random layout
-currentLayout = Math.floor(Math.random() * coneLayouts.length);
-let cones = JSON.parse(JSON.stringify(coneLayouts[currentLayout]));
+// Initialize layout (will be set properly in init based on ghost)
+currentLayout = 0;
+let cones = [];
 
 // Initialize
 function init() {
@@ -338,22 +338,32 @@ function init() {
         }
     };
     
-    // Load ghost from localStorage
+    // Load ghost from localStorage and set layout
     const savedGhost = localStorage.getItem('paper86-ghost');
+    let ghostLayout = null;
     if (savedGhost) {
         try {
             const ghostData = JSON.parse(savedGhost);
             if (ghostData.recording) {
                 // New format with layout
                 ghostPlayback = ghostData.recording;
+                ghostLayout = ghostData.layout;
             } else {
-                // Old format, just array
+                // Old format, just array (no layout info)
                 ghostPlayback = ghostData;
             }
         } catch (e) {
             ghostPlayback = [];
         }
     }
+    
+    // Set initial layout: use ghost's layout if available, otherwise random
+    if (ghostLayout !== null && ghostLayout >= 0 && ghostLayout < coneLayouts.length) {
+        currentLayout = ghostLayout;
+    } else {
+        currentLayout = Math.floor(Math.random() * coneLayouts.length);
+    }
+    cones = JSON.parse(JSON.stringify(coneLayouts[currentLayout]));
     
     // Keyboard controls
     window.addEventListener('keydown', (e) => {
@@ -587,8 +597,25 @@ function restart() {
     recordingTimer = 0;
     screenShake = { x: 0, y: 0, intensity: 0 };
     
-    // Pick new layout
-    currentLayout = Math.floor(Math.random() * coneLayouts.length);
+    // Pick layout: use saved ghost's layout if available, otherwise random
+    const savedGhost = localStorage.getItem('paper86-ghost');
+    let ghostLayout = null;
+    if (savedGhost) {
+        try {
+            const ghostData = JSON.parse(savedGhost);
+            if (ghostData.layout !== undefined) {
+                ghostLayout = ghostData.layout;
+            }
+        } catch (e) {
+            // Invalid ghost data, ignore
+        }
+    }
+    
+    if (ghostLayout !== null && ghostLayout >= 0 && ghostLayout < coneLayouts.length) {
+        currentLayout = ghostLayout;
+    } else {
+        currentLayout = Math.floor(Math.random() * coneLayouts.length);
+    }
     cones = JSON.parse(JSON.stringify(coneLayouts[currentLayout]));
     
     document.getElementById('end-screen').classList.add('hidden');
@@ -933,6 +960,7 @@ function endGame(reason = 'timeout') {
     }
     
     const finalScore = Math.floor(score);
+    const oldBestScore = bestScore;
     const isNewBest = finalScore > bestScore;
     
     if (isNewBest) {
@@ -956,6 +984,25 @@ function endGame(reason = 'timeout') {
     
     document.getElementById('final-score').textContent = finalScore;
     document.getElementById('best-score').textContent = bestScore;
+    
+    // Show beat message
+    const beatMessage = document.getElementById('beat-message');
+    
+    if (isNewBest && finalScore > 0) {
+        if (oldBestScore > 0) {
+            const improvement = finalScore - oldBestScore;
+            beatMessage.textContent = `You beat the ghost by ${improvement} points!`;
+        } else {
+            beatMessage.textContent = 'First score on the board!';
+        }
+        beatMessage.classList.remove('hidden');
+    } else if (finalScore > 0 && oldBestScore > 0) {
+        const deficit = oldBestScore - finalScore;
+        beatMessage.textContent = `${deficit} points behind the ghost.`;
+        beatMessage.classList.remove('hidden');
+    } else {
+        beatMessage.classList.add('hidden');
+    }
     
     // Show new best badge
     const newBestBadge = document.getElementById('new-best-badge');
@@ -1249,7 +1296,9 @@ function drawComboMeter() {
     const progress = remainingTime / comboWindow;
     
     const centerX = canvas.width / 2;
-    const meterY = canvas.height - 80;
+    // Position higher on mobile to avoid overlap with mute button
+    const isMobile = canvas.width < 768;
+    const meterY = canvas.height - (isMobile ? 100 : 80);
     const meterWidth = 200;
     const meterHeight = 12;
     
