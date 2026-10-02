@@ -221,6 +221,20 @@ body {
     font-family: 'Courier New', Courier, monospace;
 }
 
+.beat-message {
+    font-size: 13px;
+    letter-spacing: 1px;
+    margin: 12px auto 0;
+    padding: 8px 16px;
+    color: var(--graphite);
+    font-family: Georgia, serif;
+    font-style: italic;
+}
+
+.beat-message.hidden {
+    display: none;
+}
+
 .new-best {
     background: var(--stamp-red);
     color: var(--paper-cream);
