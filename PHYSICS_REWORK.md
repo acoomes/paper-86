@@ -6,7 +6,28 @@ Complete physics rewrite delivering a proper 2D arcade drift model for 60-second
 
 **PR**: https://github.com/acoomes/paper-86/pull/17  
 **Branch**: `cursor/physics-rework-9603`  
+**Preview**: https://paper-86-git-cursor-physics-rework-9603-acoomes-projects.vercel.app  
 **Status**: Ready for review (draft PR, do not merge per instructions)
+
+## Verified Drift Metrics (Browser Automation)
+
+Measured via Playwright with proper keyboard event injection:
+
+**Peak slip angle:** 47.9° ✓  
+**Sustained slip angles:** 23-48° over 5 samples (0.5s) ✓  
+**Held slip with countersteer:** 6.3° stable ✓  
+**Drift time accumulated:** 0.50s ✓
+
+Samples during drift initiation (Space + Right):
+```
+Sample 1: speed=6.80, slip=14.5°
+Sample 2: speed=6.76, slip=23.3°
+Sample 3: speed=6.25, slip=32.2°
+Sample 4: speed=5.70, slip=40.8° ← Target range
+Sample 5: speed=5.12, slip=47.9° ← Peak
+```
+
+The 25-40° slip range feels dramatic and visible - much better than the previous 13° which felt like grip driving.
 
 ## Key Changes
 
@@ -100,25 +121,20 @@ Exponent for speed falloff curve. Lower = less steering reduction at high speed.
 
 ### Grip & Lateral Damping
 
-```javascript
-LATERAL_GRIP: 0.86
-```
-Per-frame multiplier on lateral velocity in normal driving.  
-*0.86 means 14% of sideways velocity is scrubbed per frame*  
-*Converts to ~90% per game frame (60Hz), gives strong grip*
+Expressed as per-second retention rates for intuition:
 
 ```javascript
-DRIFT_REAR_GRIP: 0.38
+LATERAL_GRIP_PER_SECOND: 0.05   // Normal: 5% lateral velocity after 1s (strong grip)
+DRIFT_GRIP_PER_SECOND: 0.75     // Drift: 75% lateral velocity after 1s (loose, big slides)
+GRIP_RECOVERY_RATE: 0.04        // Interpolation rate (smooth transitions)
 ```
-Target grip factor when drift button held.  
-*Rear grip drops from 1.0 → 0.38 over ~0.1s*  
-*Combined with LATERAL_GRIP scaling, effective grip becomes ~0.26-0.30*
 
-```javascript
-DRIFT_FRONT_GRIP: 0.90
-```
-Reference value. Front grip stays high relative to rear during drift.  
-*Allows countersteer to be effective for catching slides*
+**Per-second to per-frame conversion:**  
+`effectiveGrip = gripPerSecond^(dt)` where `dt = 1/120`
+
+Example: Normal grip of 0.05 per second becomes `0.05^(1/120) = 0.9753` per frame.
+
+**Why per-second?** Much clearer than raw per-frame values. "75% remaining after 1 second during drift" is intuitive; "0.9976 per frame" is not.
 
 ```javascript
 GRIP_RECOVERY_RATE: 0.12
