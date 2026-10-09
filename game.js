@@ -8,47 +8,47 @@ const ctx = canvas.getContext('2d');
 // =============================================================================
 const PHYSICS = {
     // Speed and acceleration
-    ACCELERATION: 0.25,              // Forward acceleration (automatic throttle)
-    MAX_SPEED: 6.5,                  // Top speed (clean driving)
-    CRUISE_SPEED: 5.0,               // Natural cruising speed
+    ACCELERATION: 0.28,              // Forward acceleration (automatic throttle)
+    MAX_SPEED: 6.8,                  // Top speed (clean driving)
+    CRUISE_SPEED: 5.2,               // Natural cruising speed
     MIN_SPEED_FOR_STEERING: 0.8,     // Minimum speed to turn
     
     // Steering (speed-sensitive)
-    BASE_STEERING_RATE: 0.078,       // Max steering at low speed (rad/frame @ 120Hz)
-    MIN_STEERING_RATE: 0.025,        // Min steering at top speed
-    STEERING_SPEED_CURVE: 0.7,       // How quickly steering reduces with speed (0-1)
+    BASE_STEERING_RATE: 0.085,       // Max steering at low speed (rad/frame @ 120Hz)
+    MIN_STEERING_RATE: 0.028,        // Min steering at top speed
+    STEERING_SPEED_CURVE: 0.65,      // How quickly steering reduces with speed (0-1)
     
     // Grip and lateral damping
-    LATERAL_GRIP: 0.88,              // How much lateral velocity is damped per frame (normal)
-    DRIFT_REAR_GRIP: 0.45,           // Rear grip multiplier when drifting (causes oversteer)
-    DRIFT_FRONT_GRIP: 0.92,          // Front grip stays higher (allows countersteer)
-    GRIP_RECOVERY_RATE: 0.08,        // How quickly grip returns after releasing drift
+    LATERAL_GRIP: 0.86,              // How much lateral velocity is damped per frame (normal)
+    DRIFT_REAR_GRIP: 0.38,           // Rear grip multiplier when drifting (causes oversteer)
+    DRIFT_FRONT_GRIP: 0.90,          // Front grip stays higher (allows countersteer)
+    GRIP_RECOVERY_RATE: 0.12,        // How quickly grip returns after releasing drift
     
     // Drift speed loss
-    DRIFT_SPEED_RETENTION: 0.985,    // Speed multiplier per frame while drifting
-    CLEAN_DRIFT_THRESHOLD: 0.35,     // Slip angle below this maintains more speed
-    MESSY_DRIFT_PENALTY: 0.975,      // Extra speed loss for big slip angles
+    DRIFT_SPEED_RETENTION: 0.987,    // Speed multiplier per frame while drifting
+    CLEAN_DRIFT_THRESHOLD: 0.4,      // Slip angle below this maintains more speed
+    MESSY_DRIFT_PENALTY: 0.978,      // Extra speed loss for big slip angles
     
     // Drag and friction
-    BASE_DRAG: 0.992,                // Always-on speed decay
-    ROLLING_RESISTANCE: 0.003,       // Constant speed loss per frame
+    BASE_DRAG: 0.993,                // Always-on speed decay
+    ROLLING_RESISTANCE: 0.002,       // Constant speed loss per frame
     
     // Collision response
-    WALL_RESTITUTION: 0.25,          // Bounce factor (0=stick, 1=perfect bounce)
-    WALL_SPEED_LOSS: 0.35,           // Speed retention after wall hit
-    CONE_HIT_SPEED_LOSS: 0.82,       // Speed retention after hard cone hit
+    WALL_RESTITUTION: 0.3,           // Bounce factor (0=stick, 1=perfect bounce)
+    WALL_SPEED_LOSS: 0.4,            // Speed retention after wall hit
+    CONE_HIT_SPEED_LOSS: 0.85,       // Speed retention after hard cone hit
     COLLISION_SHAKE_WALL: 12,        // Screen shake intensity for wall
     COLLISION_SHAKE_CONE: 5,         // Screen shake intensity for cone
     
     // Tire marks (slip-based)
-    TIRE_MARK_SLIP_THRESHOLD: 0.18,  // Minimum slip angle to leave marks
-    TIRE_MARK_OPACITY_SCALE: 2.8,    // How dark marks get with slip
-    TIRE_MARK_SPACING: 0.35,         // Random gate for mark density
+    TIRE_MARK_SLIP_THRESHOLD: 0.15,  // Minimum slip angle to leave marks
+    TIRE_MARK_OPACITY_SCALE: 3.2,    // How dark marks get with slip
+    TIRE_MARK_SPACING: 0.3,          // Random gate for mark density
     MAX_TIRE_MARKS: 350,
     
     // Drift detection (for sound and stats)
-    DRIFT_SLIP_THRESHOLD: 0.22,      // Slip angle to trigger drift sound/stat
-    DRIFT_MIN_SPEED: 2.5,            // Minimum speed for drift to count
+    DRIFT_SLIP_THRESHOLD: 0.18,      // Slip angle to trigger drift sound/stat (reduced for easier triggering)
+    DRIFT_MIN_SPEED: 2.0,            // Minimum speed for drift to count (reduced)
     
     // Fixed timestep
     PHYSICS_HZ: 120,                 // Physics update rate (frame-rate independent)
