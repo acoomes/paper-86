@@ -1,102 +1,198 @@
-# Paper 86 Physics Rework - Complete Reference
+# Paper 86 Physics Rework - 120Hz Fixed Timestep
 
 ## Summary
 
-Complete physics rewrite delivering a proper 2D arcade drift model for 60-second score attack gameplay.
+Physics update adding frame-rate independence via 120Hz fixed timestep while preserving Andrew's proven gameplay feel.
 
 **PR**: https://github.com/acoomes/paper-86/pull/17  
 **Branch**: `cursor/physics-rework-9603`  
 **Preview**: https://paper-86-git-cursor-physics-rework-9603-acoomes-projects.vercel.app  
-**Status**: Ready for review (draft PR, do not merge per instructions)
+**Status**: Fixes applied, awaiting manual verification in real browser
 
-## Verified Drift Metrics (Browser Automation)
+## Critical Fixes Applied (Latest Commit)
 
-Measured via Playwright with proper keyboard event injection:
+### Problem Identified
+Andrew playtested preview and found it "badly broken":
+- Car moves WAY too fast
+- Flies off track wildly / uncontrollable  
+- Loud blaring error sound at end
 
-**Peak slip angle:** 47.9° ✓  
-**Sustained slip angles:** 23-48° over 5 samples (0.5s) ✓  
-**Held slip with countersteer:** 6.3° stable ✓  
-**Drift time accumulated:** 0.50s ✓
+**Root cause**: Constants were per-frame values tuned for Andrew's original ~60Hz loop but being applied at 120x/sec in the previous implementation, causing double speed/turn/drag.
 
-Samples during drift initiation (Space + Right):
-```
-Sample 1: speed=6.80, slip=14.5°
-Sample 2: speed=6.76, slip=23.3°
-Sample 3: speed=6.25, slip=32.2°
-Sample 4: speed=5.70, slip=40.8° ← Target range
-Sample 5: speed=5.12, slip=47.9° ← Peak
-```
+### Solution: Pragmatic Revert + Surgical Enhancements
 
-The 25-40° slip range feels dramatic and visible - much better than the previous 13° which felt like grip driving.
+**Approach**: Reverted to main's working baseline (Andrew's tuned constants) and applied minimal surgical fixes:
 
-## Key Changes
+1. **120Hz Fixed Timestep Wrapper**
+   - Added `PHYSICS_HZ = 120` constant
+   - Added `physicsAccumulator` for frame-rate independence
+   - Extracted physics into `updateCarPhysicsStep(dt)` function
+   - Wrapped in accumulator loop for exact 120Hz updates regardless of display refresh rate
 
-### 1. **2D Vehicle Physics Model**
-- Velocity vector separate from heading direction
-- Real slip angles from the difference between car direction and movement direction
-- Lateral velocity damped by grip (creates the "sliding" vs "gripping" feel)
+2. **Track Boundary Clamping**
+   ```javascript
+   // Prevents car from ever leaving track bounds
+   const TRACK_MARGIN = 100;
+   if (car.x < 200 - TRACK_MARGIN) {
+       car.x = 200 - TRACK_MARGIN;
+       car.vx = Math.abs(car.vx) * 0.3; // Reflect and dampen
+   }
+   // ... similar for all 4 boundaries
+   ```
 
-### 2. **Drift Mechanics**
-- **Holding drift button**: Reduces rear grip to ~30% of normal (from 86% → 26%)
-- **Oversteer**: Low rear grip lets the back end slide out when turning
-- **Countersteer**: Higher front grip allows steering into the slide to catch it
-- **Smooth recovery**: Grip returns gradually over ~0.1s when releasing drift (no snap)
+3. **Audio Fixes**
+   - Drift sound gain: 0.025 (was 0.035)
+   - Wall hit gain: 0.08 (was 0.15)
+   - End sound: frequency 200Hz (was 400Hz), gain 0.06 (was 0.10), 0.4s ramp
+   - Ensures no harsh blaring sounds
 
-### 3. **Speed-Sensitive Steering**
-- Low speed: Full steering authority (0.085 rad/frame @ 120Hz)
-- Top speed: Reduced to 33% of max (0.028 rad/frame)
-- Curve: Power of 0.65 for smooth falloff
-- Result: Easy maneuvering at low speed, stable at high speed, still able to turn
+### Physics Constants (From Working Main)
 
-### 4. **Frame-Rate Independence**
-- Fixed 120Hz physics timestep with accumulator
-- Identical feel on 60Hz, 120Hz, 144Hz displays and phones
-- No frame-dependent bugs or varying drift behavior
+**Core Movement** (per-frame at any Hz, applied via 120Hz timestep):
+- `ACCELERATION: 0.10` - Forward thrust
+- `MAX_SPEED: 4.75` - Hard speed cap
+- `FRICTION: 0.97` - Per-frame drag (normal driving)
+- `DRIFT_FRICTION: 0.94` - Per-frame drag when drifting
 
-### 5. **Physical Collisions**
-- **Wall hits**: Velocity reflection with 30% restitution, 60% speed loss, screen shake
-- **Cone hits**: 15% speed loss, small deflection, shake
-- **No instant death**: Walls bounce you back, gameplay continues
-- Existing crash/end rules preserved if they existed in the original
+**Steering**:
+- `TURN_SPEED: 0.06` - Base turning rate
+- `DRIFT_TURN_SPEED: 0.09` - Enhanced turning during drift
+- Speed-sensitive: Less steering at higher speeds
 
-### 6. **Slip-Based Visual Feedback**
-- **Tire marks**: Only appear from real lateral slip (>0.15 rad), darkness scales with slip intensity
-- **Drift sound**: Triggers on actual slip angle (>0.18 rad) + speed (>2.0), not just button state
-- **Drift stats**: Drift time measures real sliding, not button mashing
+**Grip**:
+- `GRIP_FRICTION: 0.88` - Lateral velocity damping
+- Drift mechanics reduce rear grip causing oversteer
 
-### 7. **Ghost Recording v2**
-- Version field added to ghost data structure
-- Old unversioned ghosts ignored (prevents playback errors)
-- Future format changes can bump version safely
+### Frame-Rate Independence
 
-## Physics Constants - Detailed Reference
-
-All tunables in single `PHYSICS` object at top of `game.js`. Values shown with explanations:
-
-### Speed & Acceleration
-
+**How Fixed Timestep Works**:
 ```javascript
-ACCELERATION: 0.28
-```
-Forward thrust applied each physics frame (120Hz). Higher = quicker acceleration.  
-*Current value gives 0-60 in ~2-3 seconds of game time.*
+const PHYSICS_HZ = 120;
+let physicsAccumulator = 0;
 
-```javascript
-MAX_SPEED: 6.8
+function updateCar(dt) {
+    const physicsDt = 1 / PHYSICS_HZ;
+    physicsAccumulator += Math.min(dt, 0.1);
+    
+    while (physicsAccumulator >= physicsDt) {
+        updateCarPhysicsStep(physicsDt); // Single 120Hz step
+        physicsAccumulator -= physicsDt;
+    }
+}
 ```
-Hard speed cap. Velocity magnitude clamped to this value.  
-*Current value feels fast but controllable for arcade gameplay.*
 
-```javascript
-CRUISE_SPEED: 5.2
-```
-Reference value (documentation only). Natural speed car reaches with acceleration vs drag.
+**Benefits**:
+- Identical physics on 60Hz, 120Hz, 144Hz displays
+- No speed/drift variations across devices
+- Deterministic behavior
+- Main's proven feel preserved
 
-```javascript
-MIN_SPEED_FOR_STEERING: 0.8
-```
-Below this speed, steering inputs have no effect.  
-*Prevents spinning in place when stopped.*
+## Verification Status
+
+### Automated Tests (Headless Browser)
+- ✅ Game loads without JavaScript errors
+- ✅ Game starts and runs to completion
+- ✅ End screen displays properly
+- ⚠️ Physics measurements limited by headless browser constraints
+
+### Manual Verification Required
+The following must be tested in a real browser on the preview URL:
+
+1. **Speed Check**
+   - Car should feel same speed as main (not too fast)
+   - Measure: ~190 px/s cruise speed expected
+   - Top speed should be capped and feel right
+
+2. **Track Boundaries**
+   - Car must NEVER leave track bounds
+   - Walls should contain the car (no flying off)
+   - Boundary clamping should feel like bouncing, not jarring
+
+3. **Drift Mechanics**  
+   - Hold Space + steer to initiate drift
+   - Should see 25-40° visible slides
+   - Must be catchable with countersteer
+   - Normal driving (no Space) stays planted
+
+4. **Audio**
+   - Drift sound smooth (not harsh)
+   - Engine sound reasonable
+   - End sound SOFT (no blaring/harsh tone)
+   - All oscillators stop when game ends
+
+5. **All Layouts**
+   - Test on all 4 track layouts
+   - Each should play correctly
+   - No boundary violations on any layout
+
+## Files Modified
+
+- `game.js` - Main changes (see commit `c9d07cf`)
+  - Added 120Hz fixed timestep constants
+  - Extracted `updateCarPhysicsStep(dt)` function  
+  - Added track boundary clamping
+  - Reduced audio gains
+  - Softened end sound
+
+## Implementation Notes
+
+### Why This Approach?
+
+Previous attempt to convert all constants to per-second rates had cascading issues:
+- Position updates missing `dt` multiplication
+- Grip values causing catastrophic speed loss
+- Complex interdependencies hard to tune
+- Broke Andrew's carefully balanced feel
+
+**Current approach**:
+- Keeps working constants from main
+- Adds only frame-rate independence wrapper
+- Minimal risk of breaking gameplay
+- Easy to verify against main's behavior
+
+### Track Bounds
+
+Approximate track bounds (varies by layout):
+- X: 100-1100 pixels (with 100px margin = 200-1000 valid)
+- Y: 100-900 pixels (with margin)
+
+Clamping uses `TRACK_MARGIN = 100` buffer to prevent edge clipping.
+
+## Testing the Preview
+
+**Preview URL**: https://paper-86-git-cursor-physics-rework-9603-acoomes-projects.vercel.app
+
+**How to Test**:
+1. Open preview URL in browser
+2. Press Space to start
+3. Arrow keys to drive
+4. Hold Space while turning to drift
+5. Play full 60-second run
+6. Check all 4 points in "Manual Verification Required" above
+
+**What to Report**:
+- Does car speed feel correct? (vs main)
+- Any boundary violations?
+- Can you drift? What angles?
+- Audio quality (especially end sound)?
+- Any JavaScript errors in console?
+
+## Comparison to Main
+
+**Unchanged from main**:
+- All movement/speed constants
+- All grip/friction values  
+- Steering feel
+- Collision behavior (added boundary clamping)
+- Drift button mechanics
+- CLIP scoring system
+
+**Added to main**:
+- Fixed 120Hz timestep (frame-rate independence)
+- Track boundary clamping (prevents escape)
+- Softer audio (prevents harsh sounds)
+
+**Result**: Should feel like main but run consistently across all devices.
 
 ### Steering (Speed-Sensitive)
 
