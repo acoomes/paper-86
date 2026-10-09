@@ -716,7 +716,7 @@ function restart() {
 // PHYSICS UPDATE - Fixed timestep arcade drift model
 // =============================================================================
 
-function updateCarPhysicsStep() {
+function simulatePhysicsStep() {
     // This runs at fixed PHYSICS_HZ (120Hz) for frame-rate independence
     
     const isDrifting = drifting || touchDrifting;
@@ -754,16 +754,22 @@ function updateCarPhysicsStep() {
     const targetGrip = isDrifting ? PHYSICS.DRIFT_REAR_GRIP : 1.0;
     car.currentGripFactor += (targetGrip - car.currentGripFactor) * PHYSICS.GRIP_RECOVERY_RATE;
     
-    // Lateral velocity damping (this is the "grip" that pulls velocity toward heading)
-    // Split into forward and lateral components
+    // Split velocity into forward and lateral components in car's reference frame
     const forwardVel = car.vx * Math.cos(car.heading) + car.vy * Math.sin(car.heading);
     const lateralVel = -car.vx * Math.sin(car.heading) + car.vy * Math.cos(car.heading);
     
-    // Damp lateral velocity based on grip (lower grip = more slide)
-    const lateralGrip = isDrifting ? 
-        (PHYSICS.DRIFT_FRONT_GRIP + car.currentGripFactor * (PHYSICS.LATERAL_GRIP - PHYSICS.DRIFT_FRONT_GRIP)) :
-        PHYSICS.LATERAL_GRIP;
-    const dampedLateralVel = lateralVel * lateralGrip;
+    // Apply lateral grip based on drift state
+    // In drift mode: much lower grip allows sliding
+    // Out of drift mode: high grip keeps car tracking straight
+    let effectiveLateralGrip;
+    if (isDrifting) {
+        // Blend from high grip down to low grip as currentGripFactor drops
+        effectiveLateralGrip = PHYSICS.LATERAL_GRIP * (0.3 + 0.7 * car.currentGripFactor);
+    } else {
+        effectiveLateralGrip = PHYSICS.LATERAL_GRIP;
+    }
+    
+    const dampedLateralVel = lateralVel * effectiveLateralGrip;
     
     // Reconstruct velocity from forward/lateral in heading frame
     car.vx = Math.cos(car.heading) * forwardVel - Math.sin(car.heading) * dampedLateralVel;
@@ -845,7 +851,7 @@ function updateCar(dt) {
     // Fixed timestep physics (120Hz accumulator for frame-rate independence)
     physicsAccumulator += Math.min(dt, PHYSICS.MAX_FRAME_TIME);
     while (physicsAccumulator >= physicsDt) {
-        updateCarPhysicsStep();
+        simulatePhysicsStep();
         physicsAccumulator -= physicsDt;
     }
     
