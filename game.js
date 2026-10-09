@@ -17,6 +17,15 @@ let screenShake = { x: 0, y: 0, intensity: 0 };
 let currentLayout = 0;
 let comboDecayWarning = false;
 
+// Daily track and stats
+let todayDateString = '';
+let dailyBestScore = 0;
+let runStats = {
+    clips: 0,
+    bestCombo: 0,
+    driftTime: 0
+};
+
 // Audio state
 let audioContext = null;
 let audioMuted = localStorage.getItem('paper86-muted') === 'true';
@@ -326,6 +335,33 @@ const coneLayouts = [
 currentLayout = 0;
 let cones = [];
 
+// Get today's date string (YYYY-MM-DD)
+function getTodayDateString() {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+// Simple hash function for date seeding
+function hashString(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
+    }
+    return Math.abs(hash);
+}
+
+// Get daily seeded layout
+function getDailyLayout() {
+    const dateStr = getTodayDateString();
+    const hash = hashString(dateStr);
+    return hash % coneLayouts.length;
+}
+
 // Initialize
 function init() {
     resizeCanvas();
@@ -338,32 +374,28 @@ function init() {
         }
     };
     
-    // Load ghost from localStorage and set layout
+    // Set today's date and load daily best
+    todayDateString = getTodayDateString();
+    dailyBestScore = parseInt(localStorage.getItem(`paper86-daily-best-${todayDateString}`) || '0');
+    
+    // Use daily seeded layout
+    currentLayout = getDailyLayout();
+    cones = JSON.parse(JSON.stringify(coneLayouts[currentLayout]));
+    
+    // Load ghost from localStorage (still keep for reference, but daily track takes precedence)
     const savedGhost = localStorage.getItem('paper86-ghost');
-    let ghostLayout = null;
     if (savedGhost) {
         try {
             const ghostData = JSON.parse(savedGhost);
             if (ghostData.recording) {
-                // New format with layout
                 ghostPlayback = ghostData.recording;
-                ghostLayout = ghostData.layout;
             } else {
-                // Old format, just array (no layout info)
                 ghostPlayback = ghostData;
             }
         } catch (e) {
             ghostPlayback = [];
         }
     }
-    
-    // Set initial layout: use ghost's layout if available, otherwise random
-    if (ghostLayout !== null && ghostLayout >= 0 && ghostLayout < coneLayouts.length) {
-        currentLayout = ghostLayout;
-    } else {
-        currentLayout = Math.floor(Math.random() * coneLayouts.length);
-    }
-    cones = JSON.parse(JSON.stringify(coneLayouts[currentLayout]));
     
     // Keyboard controls
     window.addEventListener('keydown', (e) => {
@@ -518,7 +550,7 @@ function init() {
         e.stopPropagation();
         
         const finalScore = Math.floor(score);
-        const shareText = `I scored ${finalScore} in PAPER 86! 🏎️\nBest: ${bestScore}\n\nPlay: https://paper-86.vercel.app`;
+        const shareText = `I scored ${finalScore} in PAPER 86! 🏎️\n${todayDateString} · Daily best: ${dailyBestScore}\n\nPlay: https://paper-86.vercel.app`;
         
         // Try native share API
         if (navigator.share) {
@@ -597,25 +629,15 @@ function restart() {
     recordingTimer = 0;
     screenShake = { x: 0, y: 0, intensity: 0 };
     
-    // Pick layout: use saved ghost's layout if available, otherwise random
-    const savedGhost = localStorage.getItem('paper86-ghost');
-    let ghostLayout = null;
-    if (savedGhost) {
-        try {
-            const ghostData = JSON.parse(savedGhost);
-            if (ghostData.layout !== undefined) {
-                ghostLayout = ghostData.layout;
-            }
-        } catch (e) {
-            // Invalid ghost data, ignore
-        }
-    }
+    // Reset run stats
+    runStats = {
+        clips: 0,
+        bestCombo: 0,
+        driftTime: 0
+    };
     
-    if (ghostLayout !== null && ghostLayout >= 0 && ghostLayout < coneLayouts.length) {
-        currentLayout = ghostLayout;
-    } else {
-        currentLayout = Math.floor(Math.random() * coneLayouts.length);
-    }
+    // Use daily seeded layout
+    currentLayout = getDailyLayout();
     cones = JSON.parse(JSON.stringify(coneLayouts[currentLayout]));
     
     document.getElementById('end-screen').classList.add('hidden');
@@ -628,6 +650,11 @@ function updateCar(dt) {
     if (gameState !== 'playing') return;
     
     const isDrifting = drifting || touchDrifting;
+    
+    // Track drift time
+    if (isDrifting && car.speed > 2) {
+        runStats.driftTime += dt;
+    }
     
     // Handle drift sound
     if (isDrifting && car.speed > 2 && !driftOscillator) {
@@ -904,6 +931,8 @@ function checkCones() {
         if (dist < coneRadius + car.width / 2) {
             cone.hit = true;
             combo++;
+            runStats.clips++;
+            runStats.bestCombo = Math.max(runStats.bestCombo, combo);
             score += 100 * combo;
             lastConeTime = now;
             spawnParticles(cone.x, cone.y, 12, '#d4773d');
@@ -916,6 +945,8 @@ function checkCones() {
             cone.clipped = true;
             cone.clipResetTimer = now;
             combo++;
+            runStats.clips++;
+            runStats.bestCombo = Math.max(runStats.bestCombo, combo);
             const clipScore = 50 * combo;
             score += clipScore;
             lastConeTime = now;
@@ -961,8 +992,11 @@ function endGame(reason = 'timeout') {
     
     const finalScore = Math.floor(score);
     const oldBestScore = bestScore;
+    const oldDailyBest = dailyBestScore;
     const isNewBest = finalScore > bestScore;
+    const isNewDailyBest = finalScore > dailyBestScore;
     
+    // Update all-time best
     if (isNewBest) {
         bestScore = finalScore;
         localStorage.setItem('paper86-best', bestScore.toString());
@@ -978,6 +1012,12 @@ function endGame(reason = 'timeout') {
         }
     }
     
+    // Update daily best
+    if (isNewDailyBest) {
+        dailyBestScore = finalScore;
+        localStorage.setItem(`paper86-daily-best-${todayDateString}`, dailyBestScore.toString());
+    }
+    
     // Update end card title based on reason
     const endTitle = document.querySelector('.end-title');
     endTitle.textContent = reason === 'crash' ? 'CRASH' : "TIME'S UP";
@@ -985,20 +1025,25 @@ function endGame(reason = 'timeout') {
     document.getElementById('final-score').textContent = finalScore;
     document.getElementById('best-score').textContent = bestScore;
     
+    // Update run breakdown
+    document.getElementById('run-clips').textContent = runStats.clips;
+    document.getElementById('run-best-combo').textContent = runStats.bestCombo;
+    document.getElementById('run-drift-time').textContent = runStats.driftTime.toFixed(1) + 's';
+    
     // Show beat message
     const beatMessage = document.getElementById('beat-message');
     
-    if (isNewBest && finalScore > 0) {
-        if (oldBestScore > 0) {
-            const improvement = finalScore - oldBestScore;
-            beatMessage.textContent = `You beat the ghost by ${improvement} points!`;
+    if (isNewDailyBest && finalScore > 0) {
+        if (oldDailyBest > 0) {
+            const improvement = finalScore - oldDailyBest;
+            beatMessage.textContent = `New daily best! +${improvement} points`;
         } else {
-            beatMessage.textContent = 'First score on the board!';
+            beatMessage.textContent = 'First run today!';
         }
         beatMessage.classList.remove('hidden');
-    } else if (finalScore > 0 && oldBestScore > 0) {
-        const deficit = oldBestScore - finalScore;
-        beatMessage.textContent = `${deficit} points behind the ghost.`;
+    } else if (finalScore > 0 && oldDailyBest > 0) {
+        const deficit = oldDailyBest - finalScore;
+        beatMessage.textContent = `${deficit} behind today's best`;
         beatMessage.classList.remove('hidden');
     } else {
         beatMessage.classList.add('hidden');
@@ -1006,7 +1051,7 @@ function endGame(reason = 'timeout') {
     
     // Show new best badge
     const newBestBadge = document.getElementById('new-best-badge');
-    if (isNewBest && finalScore > 0) {
+    if (isNewDailyBest && finalScore > 0) {
         newBestBadge.classList.remove('hidden');
     } else {
         newBestBadge.classList.add('hidden');
@@ -1247,32 +1292,39 @@ function drawStartCard() {
     ctx.fillText('PAPER 86', 0, -85);
     ctx.letterSpacing = '0px';
     
+    // Date stamp
+    ctx.font = '11px "Courier New", monospace';
+    ctx.fillStyle = '#8b1e1e';
+    ctx.letterSpacing = '0.1em';
+    ctx.fillText(todayDateString, 0, -55);
+    ctx.letterSpacing = '0px';
+    
     // Quiet pitch
     ctx.font = '13px Georgia, serif';
     ctx.fillStyle = '#5c5348';
-    ctx.fillText('60s drift attack', 0, -50);
+    ctx.fillText('60s drift attack', 0, -30);
     
     // Controls - tighter, mobile-aware
     ctx.font = '12px "Courier New", monospace';
     ctx.fillStyle = '#2a241c';
     const isMobile = 'ontouchstart' in window;
     if (isMobile) {
-        ctx.fillText('Hold left / right half to steer · hold to drift', 0, -10);
+        ctx.fillText('Hold left / right half to steer · hold to drift', 0, 10);
     } else {
-        ctx.fillText('Arrows steer · Space drifts', 0, -10);
+        ctx.fillText('Arrows steer · Space drifts', 0, 10);
     }
     
     // Thread the cones hint
     ctx.font = '11px Georgia, serif';
     ctx.fillStyle = '#5c5348';
-    ctx.fillText('Thread the cones', 0, 20);
+    ctx.fillText('Thread the cones', 0, 40);
     
-    // BEST line (stamp-red Courier when present)
-    if (bestScore > 0) {
+    // DAILY BEST line (stamp-red Courier when present)
+    if (dailyBestScore > 0) {
         ctx.font = 'bold 16px "Courier New", monospace';
         ctx.fillStyle = '#8b1e1e';
         ctx.letterSpacing = '0.1em';
-        ctx.fillText(`BEST  ${bestScore}`, 0, 65);
+        ctx.fillText(`TODAY'S BEST  ${dailyBestScore}`, 0, 75);
         ctx.letterSpacing = '0px';
     }
     
