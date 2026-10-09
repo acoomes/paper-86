@@ -55,7 +55,7 @@ const car = {
     height: 36
 };
 
-// Physics constants
+// Physics constants (tuned for 60Hz, but will run at 120Hz fixed timestep)
 const ACCELERATION = 0.10;
 const MAX_SPEED = 4.75;
 const FRICTION = 0.97;
@@ -63,8 +63,12 @@ const TURN_SPEED = 0.06;
 const DRIFT_TURN_SPEED = 0.09;
 const DRIFT_FRICTION = 0.94;
 const GRIP_FRICTION = 0.88;
-const DRIFT_SPEED_BLEED = 0.97; // Speed loss while drifting
-const SLIP_RECOVERY_TIME = 0.2; // Time to snap velocity to heading
+const DRIFT_SPEED_BLEED = 0.97;
+const SLIP_RECOVERY_TIME = 0.2;
+
+// Fixed timestep
+const PHYSICS_HZ = 120;
+let physicsAccumulator = 0;
 
 // Camera
 const camera = {
@@ -128,7 +132,7 @@ function playSound(type, comboCount = 0) {
         osc.frequency.setValueAtTime(100, now);
         osc.frequency.exponentialRampToValueAtTime(50, now + 0.2);
         
-        gain.gain.setValueAtTime(0.15, now);
+        gain.gain.setValueAtTime(0.08, now);
         gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
         
         osc.start(now);
@@ -157,11 +161,11 @@ function playSound(type, comboCount = 0) {
         osc.connect(gain);
         gain.connect(audioContext.destination);
         
-        osc.frequency.setValueAtTime(600, now);
-        osc.frequency.exponentialRampToValueAtTime(200, now + 0.5);
+        osc.frequency.setValueAtTime(400, now);
+        osc.frequency.exponentialRampToValueAtTime(200, now + 0.4);
         
-        gain.gain.setValueAtTime(0.1, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+        gain.gain.setValueAtTime(0.06, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
         
         osc.start(now);
         osc.stop(now + 0.5);
@@ -214,7 +218,7 @@ function startDriftSound() {
     driftGain.connect(audioContext.destination);
     
     driftGain.gain.setValueAtTime(0, now);
-    driftGain.gain.linearRampToValueAtTime(0.035, now + 0.1);
+    driftGain.gain.linearRampToValueAtTime(0.025, now + 0.1);
     
     driftOscillator.start(now);
 }
@@ -659,6 +663,108 @@ function restart() {
     playSound('start');
 }
 
+
+function updateCarPhysicsStep(dt) {
+    // Single physics step at fixed 120Hz
+    const isDrifting = drifting || touchDrifting;
+    
+    // Steering input
+    let steerInput = 0;
+    if (keys['arrowleft'] || keys['a'] || touchSteerLeft) steerInput -= 1;
+    if (keys['arrowright'] || keys['d'] || touchSteerRight) steerInput += 1;
+    
+    // Update heading
+    if (steerInput !== 0 && car.speed > 0.5) {
+        const turnSpeed = isDrifting ? DRIFT_TURN_SPEED : TURN_SPEED;
+        const turnAmount = turnSpeed * steerInput * (car.speed / MAX_SPEED);
+        car.heading += turnAmount;
+    }
+    
+    // Acceleration
+    car.vx += Math.cos(car.heading) * ACCELERATION;
+    car.vy += Math.sin(car.heading) * ACCELERATION;
+    
+    // Calculate speed
+    car.speed = Math.sqrt(car.vx * car.vx + car.vy * car.vy);
+    if (car.speed > 0.1) {
+        car.velocityAngle = Math.atan2(car.vy, car.vx);
+    }
+    
+    // Calculate slip angle
+    let slipAngle = car.heading - car.velocityAngle;
+    while (slipAngle > Math.PI) slipAngle -= Math.PI * 2;
+    while (slipAngle < -Math.PI) slipAngle += Math.PI * 2;
+    car.slipAngle = slipAngle;
+    
+    // Apply friction and drift
+    if (isDrifting && car.speed > 2) {
+        car.vx *= DRIFT_FRICTION * DRIFT_SPEED_BLEED;
+        car.vy *= DRIFT_FRICTION * DRIFT_SPEED_BLEED;
+        
+        if (Math.sign(steerInput) !== Math.sign(slipAngle) && steerInput !== 0) {
+            const recoveryFactor = 0.15;
+            const targetVx = Math.cos(car.heading) * car.speed;
+            const targetVy = Math.sin(car.heading) * car.speed;
+            car.vx += (targetVx - car.vx) * recoveryFactor;
+            car.vy += (targetVy - car.vy) * recoveryFactor;
+        }
+        
+        if (Math.abs(slipAngle) > 0.15 && tireMarks.length < MAX_TIRE_MARKS && Math.random() > 0.3) {
+            const offsetDist = 10;
+            tireMarks.push({
+                x: car.x - Math.sin(car.heading) * offsetDist,
+                y: car.y + Math.cos(car.heading) * offsetDist,
+                angle: car.velocityAngle + (Math.random() - 0.5) * 0.3,
+                alpha: 0.8
+            });
+        }
+    } else {
+        car.vx *= FRICTION;
+        car.vy *= FRICTION;
+        
+        if (Math.abs(slipAngle) > 0.05 && car.speed > 0.5) {
+            const gripFactor = 0.85;
+            const targetVx = Math.cos(car.heading) * car.speed;
+            const targetVy = Math.sin(car.heading) * car.speed;
+            car.vx += (targetVx - car.vx) * gripFactor;
+            car.vy += (targetVy - car.vy) * gripFactor;
+        }
+    }
+    
+    // Limit speed
+    car.speed = Math.sqrt(car.vx * car.vx + car.vy * car.vy);
+    if (car.speed > MAX_SPEED) {
+        const scale = MAX_SPEED / car.speed;
+        car.vx *= scale;
+        car.vy *= scale;
+        car.speed = MAX_SPEED;
+    }
+    
+    // Update position
+    car.x += car.vx;
+    car.y += car.vy;
+    
+    // Clamp to track bounds - CRITICAL FIX
+    // Track is roughly 200-900 x, 200-750 y based on trackPoints
+    const TRACK_MARGIN = 100;
+    if (car.x < 200 - TRACK_MARGIN) {
+        car.x = 200 - TRACK_MARGIN;
+        car.vx = Math.abs(car.vx) * 0.3;
+    }
+    if (car.x > 900 + TRACK_MARGIN) {
+        car.x = 900 + TRACK_MARGIN;
+        car.vx = -Math.abs(car.vx) * 0.3;
+    }
+    if (car.y < 200 - TRACK_MARGIN) {
+        car.y = 200 - TRACK_MARGIN;
+        car.vy = Math.abs(car.vy) * 0.3;
+    }
+    if (car.y > 750 + TRACK_MARGIN) {
+        car.y = 750 + TRACK_MARGIN;
+        car.vy = -Math.abs(car.vy) * 0.3;
+    }
+}
+
 function updateCar(dt) {
     if (gameState !== 'playing') return;
     
@@ -774,6 +880,16 @@ function updateCar(dt) {
             time: 60 - timeLeft
         });
         recordingTimer = 0;
+    }
+    
+    // Fixed timestep physics (120Hz)
+    const physicsDt = 1 / PHYSICS_HZ;
+    physicsAccumulator += Math.min(dt, 0.1);
+    
+    while (physicsAccumulator >= physicsDt) {
+        // Run one physics step
+        updateCarPhysicsStep(physicsDt);
+        physicsAccumulator -= physicsDt;
     }
     
     // Check collisions

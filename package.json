@@ -5,7 +5,15 @@
   "scripts": {
     "start": "npx serve"
   },
-  "keywords": ["game", "drift", "canvas", "racing"],
+  "keywords": [
+    "game",
+    "drift",
+    "canvas",
+    "racing"
+  ],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "playwright": "^1.64.0"
+  }
 }
