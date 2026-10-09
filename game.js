@@ -18,11 +18,12 @@ const PHYSICS = {
     MIN_STEERING_RATE: 0.028,        // Min steering at top speed
     STEERING_SPEED_CURVE: 0.65,      // How quickly steering reduces with speed (0-1)
     
-    // Grip and lateral damping
-    LATERAL_GRIP: 0.86,              // How much lateral velocity is damped per frame (normal)
-    DRIFT_REAR_GRIP: 0.38,           // Rear grip multiplier when drifting (causes oversteer)
-    DRIFT_FRONT_GRIP: 0.90,          // Front grip stays higher (allows countersteer)
-    GRIP_RECOVERY_RATE: 0.12,        // How quickly grip returns after releasing drift
+    // Grip and lateral damping (values tuned for 120Hz physics rate)
+    // At 120Hz, values must be very close to 1.0 to avoid catastrophic damping
+    LATERAL_GRIP: 0.985,             // Normal lateral grip (very gentle damping per frame)
+    DRIFT_REAR_GRIP: 0.92,           // Grip multiplier when drifting
+    DRIFT_FRONT_GRIP: 0.99,          // Front grip stays very high
+    GRIP_RECOVERY_RATE: 0.05,        // Slower recovery for smoother feel
     
     // Drift speed loss
     DRIFT_SPEED_RETENTION: 0.987,    // Speed multiplier per frame while drifting
@@ -108,6 +109,22 @@ const car = {
     width: 20,
     height: 36
 };
+
+// Expose car and game state for testing/debugging
+let physicsDebugLog = [];
+let testModeNoConeSpeedLoss = false;
+if (typeof window !== 'undefined') {
+    window.car = car;
+    window.getGameState = () => gameState;
+    window.getRunStats = () => runStats;
+    window.getScore = () => score;
+    window.setTestMode = (enabled) => { 
+        collisionGraceTime = enabled ? 999999 : 3.5;
+        testModeNoConeSpeedLoss = enabled;
+    };
+    window.getPhysicsDebugLog = () => physicsDebugLog;
+    window.enablePhysicsDebug = () => { physicsDebugLog = []; window._physicsDebug = true; };
+}
 
 // Fixed timestep accumulator
 let physicsAccumulator = 0;
@@ -651,7 +668,7 @@ function startGame() {
     gameState = 'playing';
     localStorage.setItem('paper86-played', 'true');
     firstRun = false;
-    collisionGraceTime = 2.0; // Reset grace period
+    collisionGraceTime = 2.0;
     playSound('start');
 }
 
@@ -721,6 +738,10 @@ function simulatePhysicsStep() {
     
     const isDrifting = drifting || touchDrifting;
     
+    const oldSpeed = car.speed;
+    const oldVx = car.vx;
+    const oldVy = car.vy;
+    
     // Steering input
     let steerInput = 0;
     if (keys['arrowleft'] || keys['a'] || touchSteerLeft) steerInput -= 1;
@@ -763,8 +784,9 @@ function simulatePhysicsStep() {
     // Out of drift mode: high grip keeps car tracking straight
     let effectiveLateralGrip;
     if (isDrifting) {
-        // Blend from high grip down to low grip as currentGripFactor drops
-        effectiveLateralGrip = PHYSICS.LATERAL_GRIP * (0.3 + 0.7 * car.currentGripFactor);
+        // When drifting, directly scale lateral grip by currentGripFactor
+        // At full drift (gripFactor=0.38): 0.86 * 0.38 = 0.33 lateral grip
+        effectiveLateralGrip = PHYSICS.LATERAL_GRIP * Math.max(car.currentGripFactor, 0.25);
     } else {
         effectiveLateralGrip = PHYSICS.LATERAL_GRIP;
     }
@@ -808,6 +830,25 @@ function simulatePhysicsStep() {
     // Update position
     car.x += car.vx;
     car.y += car.vy;
+    
+    // Debug logging when speed changes significantly
+    if (typeof window !== 'undefined' && window._physicsDebug && Math.abs(car.speed - oldSpeed) > 1.0) {
+        physicsDebugLog.push({
+            oldSpeed: oldSpeed.toFixed(3),
+            newSpeed: car.speed.toFixed(3),
+            deltaSpeed: (car.speed - oldSpeed).toFixed(3),
+            oldVx: oldVx.toFixed(3),
+            oldVy: oldVy.toFixed(3),
+            newVx: car.vx.toFixed(3),
+            newVy: car.vy.toFixed(3),
+            deltaVx: (car.vx - oldVx).toFixed(3),
+            deltaVy: (car.vy - oldVy).toFixed(3),
+            slipAngle: car.slipAngle.toFixed(3),
+            gripFactor: car.currentGripFactor.toFixed(3),
+            isDrifting: isDrifting,
+            heading: car.heading.toFixed(3)
+        });
+    }
     
     // Tire marks from lateral slip
     const absSlip = Math.abs(slipAngle);
@@ -1106,20 +1147,22 @@ function checkCones() {
             addClipPopup(cone.x, cone.y, combo, 'HIT');
             playSound('clip', combo);
             
-            // Physical response: speed loss and small bounce
-            const speedLoss = PHYSICS.CONE_HIT_SPEED_LOSS;
-            car.vx *= speedLoss;
-            car.vy *= speedLoss;
-            
-            // Small deflection away from cone
-            const toConeX = cone.x - car.x;
-            const toConeY = cone.y - car.y;
-            const coneDistNorm = Math.hypot(toConeX, toConeY);
-            if (coneDistNorm > 0.01) {
-                const normalX = -toConeX / coneDistNorm;
-                const normalY = -toConeY / coneDistNorm;
-                car.vx += normalX * 0.5;
-                car.vy += normalY * 0.5;
+            // Physical response: speed loss and small bounce (skip in test mode)
+            if (!testModeNoConeSpeedLoss) {
+                const speedLoss = PHYSICS.CONE_HIT_SPEED_LOSS;
+                car.vx *= speedLoss;
+                car.vy *= speedLoss;
+                
+                // Small deflection away from cone
+                const toConeX = cone.x - car.x;
+                const toConeY = cone.y - car.y;
+                const coneDistNorm = Math.hypot(toConeX, toConeY);
+                if (coneDistNorm > 0.01) {
+                    const normalX = -toConeX / coneDistNorm;
+                    const normalY = -toConeY / coneDistNorm;
+                    car.vx += normalX * 0.5;
+                    car.vy += normalY * 0.5;
+                }
             }
             
             screenShake.intensity = PHYSICS.COLLISION_SHAKE_CONE;
