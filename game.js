@@ -1,63 +1,7 @@
-// Paper 86 v3.1 - 60-second drift racing game with full physics rework
+// Paper 86 v3 - 60-second drift racing game
 // Canvas and game state
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
-
-// =============================================================================
-// PHYSICS CONSTANTS - Arcade drift model tuned for 60s score attack
-// =============================================================================
-const PHYSICS = {
-    // Speed and acceleration
-    ACCELERATION: 0.28,              // Forward acceleration (automatic throttle)
-    MAX_SPEED: 6.8,                  // Top speed (clean driving)
-    CRUISE_SPEED: 5.2,               // Natural cruising speed
-    MIN_SPEED_FOR_STEERING: 0.8,     // Minimum speed to turn
-    
-    // Steering (speed-sensitive)
-    BASE_STEERING_RATE: 0.085,       // Max steering at low speed (rad/frame @ 120Hz)
-    MIN_STEERING_RATE: 0.028,        // Min steering at top speed
-    STEERING_SPEED_CURVE: 0.65,      // How quickly steering reduces with speed (0-1)
-    
-    // Grip and lateral damping - expressed as per-second retention rates
-    // These values describe what percentage of lateral velocity remains after 1 second
-    // Converted to per-frame values using: retention^(dt) where dt = 1/PHYSICS_HZ
-    LATERAL_GRIP_PER_SECOND: 0.05,   // Normal: 5% lateral velocity after 1s (strong grip)
-    DRIFT_GRIP_PER_SECOND: 0.75,     // Drift: 75% lateral velocity after 1s (loose, allows 25-40° slides)
-    GRIP_RECOVERY_RATE: 0.04,        // How quickly grip returns after releasing drift
-    
-    // Drift speed loss
-    DRIFT_SPEED_RETENTION: 0.987,    // Speed multiplier per frame while drifting
-    CLEAN_DRIFT_THRESHOLD: 0.4,      // Slip angle below this maintains more speed
-    MESSY_DRIFT_PENALTY: 0.978,      // Extra speed loss for big slip angles
-    
-    // Drag and friction
-    BASE_DRAG: 0.993,                // Always-on speed decay
-    ROLLING_RESISTANCE: 0.002,       // Constant speed loss per frame
-    
-    // Collision response
-    WALL_RESTITUTION: 0.3,           // Bounce factor (0=stick, 1=perfect bounce)
-    WALL_SPEED_LOSS: 0.4,            // Speed retention after wall hit
-    CONE_HIT_SPEED_LOSS: 0.85,       // Speed retention after hard cone hit
-    COLLISION_SHAKE_WALL: 12,        // Screen shake intensity for wall
-    COLLISION_SHAKE_CONE: 5,         // Screen shake intensity for cone
-    
-    // Tire marks (slip-based)
-    TIRE_MARK_SLIP_THRESHOLD: 0.15,  // Minimum slip angle to leave marks
-    TIRE_MARK_OPACITY_SCALE: 3.2,    // How dark marks get with slip
-    TIRE_MARK_SPACING: 0.3,          // Random gate for mark density
-    MAX_TIRE_MARKS: 350,
-    
-    // Drift detection (for sound and stats)
-    DRIFT_SLIP_THRESHOLD: 0.18,      // Slip angle to trigger drift sound/stat (reduced for easier triggering)
-    DRIFT_MIN_SPEED: 2.0,            // Minimum speed for drift to count (reduced)
-    
-    // Fixed timestep
-    PHYSICS_HZ: 120,                 // Physics update rate (frame-rate independent)
-    MAX_FRAME_TIME: 0.1              // Cap for spiral of death
-};
-
-// Ghost recording version
-const GHOST_VERSION = 2; // Bump when recording format changes
 
 // Game state
 let gameState = 'ready'; // 'ready', 'playing', 'ended'
@@ -103,32 +47,28 @@ const car = {
     vx: 0,
     vy: 0,
     heading: Math.atan2(700 - 750, 350 - 600), // ~-2.944, pointing along track
+    velocityAngle: Math.atan2(700 - 750, 350 - 600),
     speed: 0,
     slipAngle: 0,
-    currentGripFactor: 0.05,         // Start at normal grip (per-second retention rate)
+    slipRecoveryTimer: 0,
     width: 20,
     height: 36
 };
 
-// Expose car and game state for testing/debugging
-let physicsDebugLog = [];
-let testModeNoConeSpeedLoss = false;
-if (typeof window !== 'undefined') {
-    window.car = car;
-    window.getGameState = () => gameState;
-    window.getRunStats = () => runStats;
-    window.getScore = () => score;
-    window.setTestMode = (enabled) => { 
-        collisionGraceTime = enabled ? 999999 : 3.5;
-        testModeNoConeSpeedLoss = enabled;
-    };
-    window.getPhysicsDebugLog = () => physicsDebugLog;
-    window.enablePhysicsDebug = () => { physicsDebugLog = []; window._physicsDebug = true; };
-}
+// Physics constants (tuned for 60Hz, but will run at 120Hz fixed timestep)
+const ACCELERATION = 0.10;
+const MAX_SPEED = 4.75;
+const FRICTION = 0.97;
+const TURN_SPEED = 0.06;
+const DRIFT_TURN_SPEED = 0.09;
+const DRIFT_FRICTION = 0.94;
+const GRIP_FRICTION = 0.88;
+const DRIFT_SPEED_BLEED = 0.97;
+const SLIP_RECOVERY_TIME = 0.2;
 
-// Fixed timestep accumulator
+// Fixed timestep
+const PHYSICS_HZ = 120;
 let physicsAccumulator = 0;
-const physicsDt = 1 / PHYSICS.PHYSICS_HZ;
 
 // Camera
 const camera = {
@@ -138,7 +78,7 @@ const camera = {
 
 // Tire marks
 const tireMarks = [];
-const MAX_TIRE_MARKS = PHYSICS.MAX_TIRE_MARKS;
+const MAX_TIRE_MARKS = 300;
 
 // Particles
 const particles = [];
@@ -192,7 +132,7 @@ function playSound(type, comboCount = 0) {
         osc.frequency.setValueAtTime(100, now);
         osc.frequency.exponentialRampToValueAtTime(50, now + 0.2);
         
-        gain.gain.setValueAtTime(0.15, now);
+        gain.gain.setValueAtTime(0.08, now);
         gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
         
         osc.start(now);
@@ -221,11 +161,11 @@ function playSound(type, comboCount = 0) {
         osc.connect(gain);
         gain.connect(audioContext.destination);
         
-        osc.frequency.setValueAtTime(600, now);
-        osc.frequency.exponentialRampToValueAtTime(200, now + 0.5);
+        osc.frequency.setValueAtTime(400, now);
+        osc.frequency.exponentialRampToValueAtTime(200, now + 0.4);
         
-        gain.gain.setValueAtTime(0.1, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+        gain.gain.setValueAtTime(0.06, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
         
         osc.start(now);
         osc.stop(now + 0.5);
@@ -278,7 +218,7 @@ function startDriftSound() {
     driftGain.connect(audioContext.destination);
     
     driftGain.gain.setValueAtTime(0, now);
-    driftGain.gain.linearRampToValueAtTime(0.035, now + 0.1);
+    driftGain.gain.linearRampToValueAtTime(0.025, now + 0.1);
     
     driftOscillator.start(now);
 }
@@ -446,16 +386,13 @@ function init() {
     currentLayout = getDailyLayout();
     cones = JSON.parse(JSON.stringify(coneLayouts[currentLayout]));
     
-    // Load ghost from localStorage only if it matches current layout and version
+    // Load ghost from localStorage only if it matches current layout
     const savedGhost = localStorage.getItem('paper86-ghost');
     ghostPlayback = [];
     if (savedGhost) {
         try {
             const ghostData = JSON.parse(savedGhost);
-            // Check version compatibility
-            if (ghostData.version === GHOST_VERSION && 
-                ghostData.recording && 
-                ghostData.layout === currentLayout) {
+            if (ghostData.recording && ghostData.layout === currentLayout) {
                 ghostPlayback = ghostData.recording;
             }
         } catch (e) {
@@ -668,7 +605,7 @@ function startGame() {
     gameState = 'playing';
     localStorage.setItem('paper86-played', 'true');
     firstRun = false;
-    collisionGraceTime = 2.0;
+    collisionGraceTime = 2.0; // Reset grace period
     playSound('start');
 }
 
@@ -684,10 +621,10 @@ function restart() {
     car.vx = 0;
     car.vy = 0;
     car.heading = Math.atan2(700 - 750, 350 - 600);
+    car.velocityAngle = car.heading;
     car.speed = 0;
     car.slipAngle = 0;
-    car.currentGripFactor = PHYSICS.LATERAL_GRIP_PER_SECOND;
-    physicsAccumulator = 0;
+    car.slipRecoveryTimer = 0;
     tireMarks.length = 0;
     particles.length = 0;
     clipPopups.length = 0;
@@ -706,16 +643,13 @@ function restart() {
     currentLayout = getDailyLayout();
     cones = JSON.parse(JSON.stringify(coneLayouts[currentLayout]));
     
-    // Reload ghost from localStorage only if it matches current layout and version
+    // Reload ghost from localStorage only if it matches current layout
     const savedGhost = localStorage.getItem('paper86-ghost');
     ghostPlayback = [];
     if (savedGhost) {
         try {
             const ghostData = JSON.parse(savedGhost);
-            // Check version compatibility
-            if (ghostData.version === GHOST_VERSION && 
-                ghostData.recording && 
-                ghostData.layout === currentLayout) {
+            if (ghostData.recording && ghostData.layout === currentLayout) {
                 ghostPlayback = ghostData.recording;
             }
         } catch (e) {
@@ -729,140 +663,105 @@ function restart() {
     playSound('start');
 }
 
-// =============================================================================
-// PHYSICS UPDATE - Fixed timestep arcade drift model
-// =============================================================================
 
-function simulatePhysicsStep() {
-    // This runs at fixed PHYSICS_HZ (120Hz) for frame-rate independence
-    
+function updateCarPhysicsStep(dt) {
+    // Single physics step at fixed 120Hz
     const isDrifting = drifting || touchDrifting;
-    
-    const oldSpeed = car.speed;
-    const oldVx = car.vx;
-    const oldVy = car.vy;
     
     // Steering input
     let steerInput = 0;
     if (keys['arrowleft'] || keys['a'] || touchSteerLeft) steerInput -= 1;
     if (keys['arrowright'] || keys['d'] || touchSteerRight) steerInput += 1;
     
-    // Speed-sensitive steering rate
-    const speedRatio = Math.min(car.speed / PHYSICS.MAX_SPEED, 1.0);
-    const steerLerp = Math.pow(1.0 - speedRatio, PHYSICS.STEERING_SPEED_CURVE);
-    const steeringRate = PHYSICS.MIN_STEERING_RATE + (PHYSICS.BASE_STEERING_RATE - PHYSICS.MIN_STEERING_RATE) * steerLerp;
-    
-    // Update heading (car's facing direction)
-    if (steerInput !== 0 && car.speed > PHYSICS.MIN_SPEED_FOR_STEERING) {
-        car.heading += steeringRate * steerInput;
+    // Update heading
+    if (steerInput !== 0 && car.speed > 0.5) {
+        const turnSpeed = isDrifting ? DRIFT_TURN_SPEED : TURN_SPEED;
+        const turnAmount = turnSpeed * steerInput * (car.speed / MAX_SPEED);
+        car.heading += turnAmount;
     }
     
-    // Automatic forward acceleration along heading
-    car.vx += Math.cos(car.heading) * PHYSICS.ACCELERATION;
-    car.vy += Math.sin(car.heading) * PHYSICS.ACCELERATION;
+    // Acceleration
+    car.vx += Math.cos(car.heading) * ACCELERATION;
+    car.vy += Math.sin(car.heading) * ACCELERATION;
     
-    // Calculate current speed and velocity angle
+    // Calculate speed
     car.speed = Math.sqrt(car.vx * car.vx + car.vy * car.vy);
-    const velocityAngle = car.speed > 0.1 ? Math.atan2(car.vy, car.vx) : car.heading;
+    if (car.speed > 0.1) {
+        car.velocityAngle = Math.atan2(car.vy, car.vx);
+    }
     
-    // Slip angle = difference between heading and velocity direction
-    let slipAngle = car.heading - velocityAngle;
+    // Calculate slip angle
+    let slipAngle = car.heading - car.velocityAngle;
     while (slipAngle > Math.PI) slipAngle -= Math.PI * 2;
     while (slipAngle < -Math.PI) slipAngle += Math.PI * 2;
     car.slipAngle = slipAngle;
     
-    // Grip model: smooth transition between normal and drift grip
-    // Target is expressed as per-second retention, we interpolate in that space
-    const targetGripPerSecond = isDrifting ? PHYSICS.DRIFT_GRIP_PER_SECOND : PHYSICS.LATERAL_GRIP_PER_SECOND;
-    const currentGripPerSecond = car.currentGripFactor; // Store as per-second value
-    const newGripPerSecond = currentGripPerSecond + (targetGripPerSecond - currentGripPerSecond) * PHYSICS.GRIP_RECOVERY_RATE;
-    car.currentGripFactor = newGripPerSecond;
-    
-    // Convert per-second grip to per-frame grip for this physics step
-    const dt = 1 / PHYSICS.PHYSICS_HZ;
-    const effectiveLateralGrip = Math.pow(newGripPerSecond, dt);
-    
-    // Split velocity into forward and lateral components in car's reference frame
-    const forwardVel = car.vx * Math.cos(car.heading) + car.vy * Math.sin(car.heading);
-    const lateralVel = -car.vx * Math.sin(car.heading) + car.vy * Math.cos(car.heading);
-    
-    // Apply lateral grip (damping of sideways velocity)
-    const dampedLateralVel = lateralVel * effectiveLateralGrip;
-    
-    // Reconstruct velocity from forward/lateral in heading frame
-    car.vx = Math.cos(car.heading) * forwardVel - Math.sin(car.heading) * dampedLateralVel;
-    car.vy = Math.sin(car.heading) * forwardVel + Math.cos(car.heading) * dampedLateralVel;
-    
-    // Drift speed loss (scrubbing speed in slides)
-    if (isDrifting && car.speed > PHYSICS.DRIFT_MIN_SPEED) {
-        const absSlip = Math.abs(slipAngle);
-        const speedLoss = absSlip < PHYSICS.CLEAN_DRIFT_THRESHOLD ? 
-            PHYSICS.DRIFT_SPEED_RETENTION : 
-            PHYSICS.DRIFT_SPEED_RETENTION * PHYSICS.MESSY_DRIFT_PENALTY;
-        car.vx *= speedLoss;
-        car.vy *= speedLoss;
+    // Apply friction and drift
+    if (isDrifting && car.speed > 2) {
+        car.vx *= DRIFT_FRICTION * DRIFT_SPEED_BLEED;
+        car.vy *= DRIFT_FRICTION * DRIFT_SPEED_BLEED;
+        
+        if (Math.sign(steerInput) !== Math.sign(slipAngle) && steerInput !== 0) {
+            const recoveryFactor = 0.15;
+            const targetVx = Math.cos(car.heading) * car.speed;
+            const targetVy = Math.sin(car.heading) * car.speed;
+            car.vx += (targetVx - car.vx) * recoveryFactor;
+            car.vy += (targetVy - car.vy) * recoveryFactor;
+        }
+        
+        if (Math.abs(slipAngle) > 0.15 && tireMarks.length < MAX_TIRE_MARKS && Math.random() > 0.3) {
+            const offsetDist = 10;
+            tireMarks.push({
+                x: car.x - Math.sin(car.heading) * offsetDist,
+                y: car.y + Math.cos(car.heading) * offsetDist,
+                angle: car.velocityAngle + (Math.random() - 0.5) * 0.3,
+                alpha: 0.8
+            });
+        }
+    } else {
+        car.vx *= FRICTION;
+        car.vy *= FRICTION;
+        
+        if (Math.abs(slipAngle) > 0.05 && car.speed > 0.5) {
+            const gripFactor = 0.85;
+            const targetVx = Math.cos(car.heading) * car.speed;
+            const targetVy = Math.sin(car.heading) * car.speed;
+            car.vx += (targetVx - car.vx) * gripFactor;
+            car.vy += (targetVy - car.vy) * gripFactor;
+        }
     }
     
-    // Base drag and rolling resistance
+    // Limit speed
     car.speed = Math.sqrt(car.vx * car.vx + car.vy * car.vy);
-    if (car.speed > 0.1) {
-        car.vx *= PHYSICS.BASE_DRAG;
-        car.vy *= PHYSICS.BASE_DRAG;
-        const resistanceLoss = PHYSICS.ROLLING_RESISTANCE;
-        const velScale = Math.max(0, car.speed - resistanceLoss) / car.speed;
-        car.vx *= velScale;
-        car.vy *= velScale;
-    }
-    
-    // Cap at max speed
-    car.speed = Math.sqrt(car.vx * car.vx + car.vy * car.vy);
-    if (car.speed > PHYSICS.MAX_SPEED) {
-        const scale = PHYSICS.MAX_SPEED / car.speed;
+    if (car.speed > MAX_SPEED) {
+        const scale = MAX_SPEED / car.speed;
         car.vx *= scale;
         car.vy *= scale;
-        car.speed = PHYSICS.MAX_SPEED;
+        car.speed = MAX_SPEED;
     }
     
     // Update position
     car.x += car.vx;
     car.y += car.vy;
     
-    // Debug logging when speed changes significantly
-    if (typeof window !== 'undefined' && window._physicsDebug && Math.abs(car.speed - oldSpeed) > 1.0) {
-        physicsDebugLog.push({
-            oldSpeed: oldSpeed.toFixed(3),
-            newSpeed: car.speed.toFixed(3),
-            deltaSpeed: (car.speed - oldSpeed).toFixed(3),
-            oldVx: oldVx.toFixed(3),
-            oldVy: oldVy.toFixed(3),
-            newVx: car.vx.toFixed(3),
-            newVy: car.vy.toFixed(3),
-            deltaVx: (car.vx - oldVx).toFixed(3),
-            deltaVy: (car.vy - oldVy).toFixed(3),
-            slipAngle: car.slipAngle.toFixed(3),
-            gripFactor: car.currentGripFactor.toFixed(3),
-            isDrifting: isDrifting,
-            heading: car.heading.toFixed(3)
-        });
+    // Clamp to track bounds - CRITICAL FIX
+    // Track is roughly 200-900 x, 200-750 y based on trackPoints
+    const TRACK_MARGIN = 100;
+    if (car.x < 200 - TRACK_MARGIN) {
+        car.x = 200 - TRACK_MARGIN;
+        car.vx = Math.abs(car.vx) * 0.3;
     }
-    
-    // Tire marks from lateral slip
-    const absSlip = Math.abs(slipAngle);
-    if (absSlip > PHYSICS.TIRE_MARK_SLIP_THRESHOLD && 
-        car.speed > PHYSICS.DRIFT_MIN_SPEED && 
-        tireMarks.length < MAX_TIRE_MARKS && 
-        Math.random() > PHYSICS.TIRE_MARK_SPACING) {
-        
-        const slipIntensity = Math.min(absSlip / 0.8, 1.0);
-        const opacity = Math.min(slipIntensity * PHYSICS.TIRE_MARK_OPACITY_SCALE, 1.0);
-        const offsetDist = 10;
-        
-        tireMarks.push({
-            x: car.x - Math.sin(car.heading) * offsetDist,
-            y: car.y + Math.cos(car.heading) * offsetDist,
-            angle: velocityAngle + (Math.random() - 0.5) * 0.25,
-            alpha: opacity * 0.85
-        });
+    if (car.x > 900 + TRACK_MARGIN) {
+        car.x = 900 + TRACK_MARGIN;
+        car.vx = -Math.abs(car.vx) * 0.3;
+    }
+    if (car.y < 200 - TRACK_MARGIN) {
+        car.y = 200 - TRACK_MARGIN;
+        car.vy = Math.abs(car.vy) * 0.3;
+    }
+    if (car.y > 750 + TRACK_MARGIN) {
+        car.y = 750 + TRACK_MARGIN;
+        car.vy = -Math.abs(car.vy) * 0.3;
     }
 }
 
@@ -871,26 +770,105 @@ function updateCar(dt) {
     
     const isDrifting = drifting || touchDrifting;
     
-    // Track drift time based on actual slip
-    const absSlip = Math.abs(car.slipAngle);
-    if (absSlip > PHYSICS.DRIFT_SLIP_THRESHOLD && car.speed > PHYSICS.DRIFT_MIN_SPEED) {
+    // Track drift time
+    if (isDrifting && car.speed > 2) {
         runStats.driftTime += dt;
     }
     
-    // Handle drift sound keyed to real slip
-    const shouldPlayDriftSound = absSlip > PHYSICS.DRIFT_SLIP_THRESHOLD && car.speed > PHYSICS.DRIFT_MIN_SPEED;
-    if (shouldPlayDriftSound && !driftOscillator) {
+    // Handle drift sound
+    if (isDrifting && car.speed > 2 && !driftOscillator) {
         startDriftSound();
-    } else if (!shouldPlayDriftSound && driftOscillator) {
+    } else if ((!isDrifting || car.speed <= 2) && driftOscillator) {
         stopDriftSound();
     }
     
-    // Fixed timestep physics (120Hz accumulator for frame-rate independence)
-    physicsAccumulator += Math.min(dt, PHYSICS.MAX_FRAME_TIME);
-    while (physicsAccumulator >= physicsDt) {
-        simulatePhysicsStep();
-        physicsAccumulator -= physicsDt;
+    // Steering input
+    let steerInput = 0;
+    if (keys['arrowleft'] || keys['a'] || touchSteerLeft) steerInput -= 1;
+    if (keys['arrowright'] || keys['d'] || touchSteerRight) steerInput += 1;
+    
+    // Update heading (car's facing direction) based on steering
+    if (steerInput !== 0 && car.speed > 0.5) {
+        const turnSpeed = isDrifting ? DRIFT_TURN_SPEED : TURN_SPEED;
+        const turnAmount = turnSpeed * steerInput * (car.speed / MAX_SPEED);
+        car.heading += turnAmount;
     }
+    
+    // Acceleration (always accelerating forward along heading)
+    const accel = ACCELERATION;
+    car.vx += Math.cos(car.heading) * accel;
+    car.vy += Math.sin(car.heading) * accel;
+    
+    // Calculate speed and velocity angle
+    car.speed = Math.sqrt(car.vx * car.vx + car.vy * car.vy);
+    if (car.speed > 0.1) {
+        car.velocityAngle = Math.atan2(car.vy, car.vx);
+    }
+    
+    // Calculate slip angle (difference between heading and velocity)
+    let slipAngle = car.heading - car.velocityAngle;
+    // Normalize to -PI to PI
+    while (slipAngle > Math.PI) slipAngle -= Math.PI * 2;
+    while (slipAngle < -Math.PI) slipAngle += Math.PI * 2;
+    car.slipAngle = slipAngle;
+    
+    // Apply friction and drift mechanics
+    if (isDrifting && car.speed > 2) {
+        // Drifting: rear slips out, speed bleeds
+        car.vx *= DRIFT_FRICTION * DRIFT_SPEED_BLEED;
+        car.vy *= DRIFT_FRICTION * DRIFT_SPEED_BLEED;
+        
+        // Counter-steering helps recover
+        if (Math.sign(steerInput) !== Math.sign(slipAngle) && steerInput !== 0) {
+            // Counter-steering: help align velocity toward heading
+            const recoveryFactor = 0.15;
+            const targetVx = Math.cos(car.heading) * car.speed;
+            const targetVy = Math.sin(car.heading) * car.speed;
+            car.vx += (targetVx - car.vx) * recoveryFactor;
+            car.vy += (targetVy - car.vy) * recoveryFactor;
+        }
+        
+        // Add tire marks when slip is meaningful
+        if (Math.abs(slipAngle) > 0.15 && tireMarks.length < MAX_TIRE_MARKS && Math.random() > 0.3) {
+            const offsetDist = 10;
+            tireMarks.push({
+                x: car.x - Math.sin(car.heading) * offsetDist,
+                y: car.y + Math.cos(car.heading) * offsetDist,
+                angle: car.velocityAngle + (Math.random() - 0.5) * 0.3,
+                alpha: 0.8
+            });
+        }
+        
+        car.slipRecoveryTimer = 0;
+    } else {
+        // Not drifting: snap velocity toward heading
+        car.vx *= FRICTION;
+        car.vy *= FRICTION;
+        
+        if (Math.abs(slipAngle) > 0.05 && car.speed > 0.5) {
+            // Strongly align velocity to heading when not drifting (grip mode)
+            const gripFactor = 0.85;
+            const targetVx = Math.cos(car.heading) * car.speed;
+            const targetVy = Math.sin(car.heading) * car.speed;
+            car.vx += (targetVx - car.vx) * gripFactor;
+            car.vy += (targetVy - car.vy) * gripFactor;
+        }
+        
+        car.slipRecoveryTimer = 0;
+    }
+    
+    // Limit max speed
+    car.speed = Math.sqrt(car.vx * car.vx + car.vy * car.vy);
+    if (car.speed > MAX_SPEED) {
+        const scale = MAX_SPEED / car.speed;
+        car.vx *= scale;
+        car.vy *= scale;
+        car.speed = MAX_SPEED;
+    }
+    
+    // Update position
+    car.x += car.vx;
+    car.y += car.vy;
     
     // Record ghost data
     recordingTimer += dt;
@@ -902,6 +880,16 @@ function updateCar(dt) {
             time: 60 - timeLeft
         });
         recordingTimer = 0;
+    }
+    
+    // Fixed timestep physics (120Hz)
+    const physicsDt = 1 / PHYSICS_HZ;
+    physicsAccumulator += Math.min(dt, 0.1);
+    
+    while (physicsAccumulator >= physicsDt) {
+        // Run one physics step
+        updateCarPhysicsStep(physicsDt);
+        physicsAccumulator -= physicsDt;
     }
     
     // Check collisions
@@ -1004,75 +992,12 @@ function addClipPopup(x, y, comboCount, text = 'CLIP') {
     });
 }
 
-// =============================================================================
-// COLLISION HANDLING - Physical response with velocity reflection
-// =============================================================================
-
 function checkCollisions() {
     // Check if car is on track (only after grace period)
     if (collisionGraceTime <= 0 && !isOnTrack(car.x, car.y)) {
-        handleWallCollision();
-    }
-}
-
-function handleWallCollision() {
-    // Physical wall bounce: reflect velocity with restitution and speed loss
-    
-    // Find closest track edge point to determine collision normal
-    let closestDist = Infinity;
-    let closestNormalX = 0;
-    let closestNormalY = 0;
-    
-    for (let i = 0; i < trackPoints.length; i++) {
-        const p1 = trackPoints[i];
-        const p2 = trackPoints[(i + 1) % trackPoints.length];
-        
-        // Find closest point on this segment
-        const dx = p2.x - p1.x;
-        const dy = p2.y - p1.y;
-        const len2 = dx * dx + dy * dy;
-        
-        if (len2 === 0) continue;
-        
-        let t = ((car.x - p1.x) * dx + (car.y - p1.y) * dy) / len2;
-        t = Math.max(0, Math.min(1, t));
-        
-        const nearestX = p1.x + t * dx;
-        const nearestY = p1.y + t * dy;
-        const dist = Math.hypot(car.x - nearestX, car.y - nearestY);
-        
-        if (dist < closestDist) {
-            closestDist = dist;
-            // Normal points from track center toward car (outward)
-            const toCarX = car.x - nearestX;
-            const toCarY = car.y - nearestY;
-            const normalLen = Math.hypot(toCarX, toCarY);
-            if (normalLen > 0.01) {
-                closestNormalX = toCarX / normalLen;
-                closestNormalY = toCarY / normalLen;
-            }
-        }
-    }
-    
-    // Reflect velocity off wall normal
-    const velDotNormal = car.vx * closestNormalX + car.vy * closestNormalY;
-    
-    // Only bounce if moving into the wall
-    if (velDotNormal < 0) {
-        car.vx -= 2 * velDotNormal * closestNormalX;
-        car.vy -= 2 * velDotNormal * closestNormalY;
-        
-        // Apply restitution and speed loss
-        car.vx *= PHYSICS.WALL_RESTITUTION * PHYSICS.WALL_SPEED_LOSS;
-        car.vy *= PHYSICS.WALL_RESTITUTION * PHYSICS.WALL_SPEED_LOSS;
-        
-        // Push car back onto track slightly
-        car.x += closestNormalX * 2;
-        car.y += closestNormalY * 2;
-        
-        // Screen shake and sound
-        screenShake.intensity = PHYSICS.COLLISION_SHAKE_WALL;
+        screenShake.intensity = 15;
         playSound('wall');
+        endGame('crash');
     }
 }
 
@@ -1131,7 +1056,7 @@ function checkCones() {
         
         const dist = Math.hypot(car.x - cone.x, car.y - cone.y);
         
-        // Check for cone collection (direct hit) - now with physical response
+        // Check for cone collection (direct hit)
         if (dist < coneRadius + car.width / 2) {
             cone.hit = true;
             combo++;
@@ -1142,26 +1067,7 @@ function checkCones() {
             spawnParticles(cone.x, cone.y, 12, '#d4773d');
             addClipPopup(cone.x, cone.y, combo, 'HIT');
             playSound('clip', combo);
-            
-            // Physical response: speed loss and small bounce (skip in test mode)
-            if (!testModeNoConeSpeedLoss) {
-                const speedLoss = PHYSICS.CONE_HIT_SPEED_LOSS;
-                car.vx *= speedLoss;
-                car.vy *= speedLoss;
-                
-                // Small deflection away from cone
-                const toConeX = cone.x - car.x;
-                const toConeY = cone.y - car.y;
-                const coneDistNorm = Math.hypot(toConeX, toConeY);
-                if (coneDistNorm > 0.01) {
-                    const normalX = -toConeX / coneDistNorm;
-                    const normalY = -toConeY / coneDistNorm;
-                    car.vx += normalX * 0.5;
-                    car.vy += normalY * 0.5;
-                }
-            }
-            
-            screenShake.intensity = PHYSICS.COLLISION_SHAKE_CONE;
+            screenShake.intensity = 3;
         }
         // Check for near-miss CLIP (threading while drifting)
         else if (!cone.clipped && isDrifting && Math.abs(car.slipAngle) > 0.2 && car.speed > 2.32 && dist < nearMissRadius) {
@@ -1224,10 +1130,9 @@ function endGame(reason = 'timeout') {
         bestScore = finalScore;
         localStorage.setItem('paper86-best', bestScore.toString());
         
-        // Save ghost recording with layout and version
+        // Save ghost recording with layout
         if (ghostRecording.length > 0) {
             const ghostData = {
-                version: GHOST_VERSION,
                 layout: currentLayout,
                 recording: ghostRecording
             };
