@@ -18,12 +18,12 @@ const PHYSICS = {
     MIN_STEERING_RATE: 0.028,        // Min steering at top speed
     STEERING_SPEED_CURVE: 0.65,      // How quickly steering reduces with speed (0-1)
     
-    // Grip and lateral damping (values tuned for 120Hz physics rate)
-    // At 120Hz, values must be very close to 1.0 to avoid catastrophic damping
-    LATERAL_GRIP: 0.985,             // Normal lateral grip (very gentle damping per frame)
-    DRIFT_REAR_GRIP: 0.92,           // Grip multiplier when drifting
-    DRIFT_FRONT_GRIP: 0.99,          // Front grip stays very high
-    GRIP_RECOVERY_RATE: 0.05,        // Slower recovery for smoother feel
+    // Grip and lateral damping - expressed as per-second retention rates
+    // These values describe what percentage of lateral velocity remains after 1 second
+    // Converted to per-frame values using: retention^(dt) where dt = 1/PHYSICS_HZ
+    LATERAL_GRIP_PER_SECOND: 0.05,   // Normal: 5% lateral velocity after 1s (strong grip)
+    DRIFT_GRIP_PER_SECOND: 0.75,     // Drift: 75% lateral velocity after 1s (loose, allows 25-40° slides)
+    GRIP_RECOVERY_RATE: 0.04,        // How quickly grip returns after releasing drift
     
     // Drift speed loss
     DRIFT_SPEED_RETENTION: 0.987,    // Speed multiplier per frame while drifting
@@ -105,7 +105,7 @@ const car = {
     heading: Math.atan2(700 - 750, 350 - 600), // ~-2.944, pointing along track
     speed: 0,
     slipAngle: 0,
-    currentGripFactor: 1.0,          // Current grip interpolation (for smooth recovery)
+    currentGripFactor: 0.05,         // Start at normal grip (per-second retention rate)
     width: 20,
     height: 36
 };
@@ -686,7 +686,7 @@ function restart() {
     car.heading = Math.atan2(700 - 750, 350 - 600);
     car.speed = 0;
     car.slipAngle = 0;
-    car.currentGripFactor = 1.0;
+    car.currentGripFactor = PHYSICS.LATERAL_GRIP_PER_SECOND;
     physicsAccumulator = 0;
     tireMarks.length = 0;
     particles.length = 0;
@@ -772,25 +772,21 @@ function simulatePhysicsStep() {
     car.slipAngle = slipAngle;
     
     // Grip model: smooth transition between normal and drift grip
-    const targetGrip = isDrifting ? PHYSICS.DRIFT_REAR_GRIP : 1.0;
-    car.currentGripFactor += (targetGrip - car.currentGripFactor) * PHYSICS.GRIP_RECOVERY_RATE;
+    // Target is expressed as per-second retention, we interpolate in that space
+    const targetGripPerSecond = isDrifting ? PHYSICS.DRIFT_GRIP_PER_SECOND : PHYSICS.LATERAL_GRIP_PER_SECOND;
+    const currentGripPerSecond = car.currentGripFactor; // Store as per-second value
+    const newGripPerSecond = currentGripPerSecond + (targetGripPerSecond - currentGripPerSecond) * PHYSICS.GRIP_RECOVERY_RATE;
+    car.currentGripFactor = newGripPerSecond;
+    
+    // Convert per-second grip to per-frame grip for this physics step
+    const dt = 1 / PHYSICS.PHYSICS_HZ;
+    const effectiveLateralGrip = Math.pow(newGripPerSecond, dt);
     
     // Split velocity into forward and lateral components in car's reference frame
     const forwardVel = car.vx * Math.cos(car.heading) + car.vy * Math.sin(car.heading);
     const lateralVel = -car.vx * Math.sin(car.heading) + car.vy * Math.cos(car.heading);
     
-    // Apply lateral grip based on drift state
-    // In drift mode: much lower grip allows sliding
-    // Out of drift mode: high grip keeps car tracking straight
-    let effectiveLateralGrip;
-    if (isDrifting) {
-        // When drifting, directly scale lateral grip by currentGripFactor
-        // At full drift (gripFactor=0.38): 0.86 * 0.38 = 0.33 lateral grip
-        effectiveLateralGrip = PHYSICS.LATERAL_GRIP * Math.max(car.currentGripFactor, 0.25);
-    } else {
-        effectiveLateralGrip = PHYSICS.LATERAL_GRIP;
-    }
-    
+    // Apply lateral grip (damping of sideways velocity)
     const dampedLateralVel = lateralVel * effectiveLateralGrip;
     
     // Reconstruct velocity from forward/lateral in heading frame
