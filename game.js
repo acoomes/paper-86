@@ -382,15 +382,14 @@ function init() {
     currentLayout = getDailyLayout();
     cones = JSON.parse(JSON.stringify(coneLayouts[currentLayout]));
     
-    // Load ghost from localStorage (still keep for reference, but daily track takes precedence)
+    // Load ghost from localStorage only if it matches current layout
     const savedGhost = localStorage.getItem('paper86-ghost');
+    ghostPlayback = [];
     if (savedGhost) {
         try {
             const ghostData = JSON.parse(savedGhost);
-            if (ghostData.recording) {
+            if (ghostData.recording && ghostData.layout === currentLayout) {
                 ghostPlayback = ghostData.recording;
-            } else {
-                ghostPlayback = ghostData;
             }
         } catch (e) {
             ghostPlayback = [];
@@ -639,6 +638,20 @@ function restart() {
     // Use daily seeded layout
     currentLayout = getDailyLayout();
     cones = JSON.parse(JSON.stringify(coneLayouts[currentLayout]));
+    
+    // Reload ghost from localStorage only if it matches current layout
+    const savedGhost = localStorage.getItem('paper86-ghost');
+    ghostPlayback = [];
+    if (savedGhost) {
+        try {
+            const ghostData = JSON.parse(savedGhost);
+            if (ghostData.recording && ghostData.layout === currentLayout) {
+                ghostPlayback = ghostData.recording;
+            }
+        } catch (e) {
+            ghostPlayback = [];
+        }
+    }
     
     document.getElementById('end-screen').classList.add('hidden');
     lastConeTime = Date.now();
