@@ -30,7 +30,8 @@ const PHYSICS = {
     counterAlign: 0.06,       // keep velocity lag while holding a slide
     holdTurnRate: 0.16,       // yaw cap while countersteering so heading can track a holdable slip
     driftAccelMix: 0.22,      // while drifting, this much throttle follows heading (rest follows velocity)
-    gripRecoverTime: 0.25,    // seconds to restore planted grip after release
+    gripRecoverTime: 0.26,    // seconds to restore planted grip after release
+    recoverEase: 4,           // power curve so slip eases out over recoverTime, not in 2 frames
     targetSlip: 0.52,         // ~30 deg — holdable slide with countersteer
     maxSlip: 0.61,            // ~35 deg hard cap; prevents spin-outs
     minVisibleSlip: 0.35,     // ~20 deg — target lower bound of a held slide
@@ -848,7 +849,8 @@ function updateCar(dt) {
     
     // Align velocity toward heading. Weak while drifting (tail stays out),
     // strong when planted. Blend on release so grip comes back smoothly.
-    let alignPerFrame = PHYSICS.gripAlign * car.gripBlend + PHYSICS.driftAlign * (1 - car.gripBlend);
+    const recoverT = Math.pow(car.gripBlend, PHYSICS.recoverEase);
+    let alignPerFrame = PHYSICS.gripAlign * recoverT + PHYSICS.driftAlign * (1 - recoverT);
     if (isCounter) {
         alignPerFrame = Math.max(alignPerFrame, PHYSICS.counterAlign);
     }
