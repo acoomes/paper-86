@@ -1,7 +1,55 @@
-// Paper 86 v3 - 60-second drift racing game
+// Paper 86 v4 - 60-second drift racing game
 // Canvas and game state
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
+
+// =============================================================================
+// PHYSICS — every tunable lives here.
+// Main's motion numbers were tuned by Andrew at 60Hz as per-frame constants.
+// Frame-rate independence: k = dt * 60.
+//   accel/turn/position  *= k
+//   damping              Math.pow(f, k)
+//   alignment lerp       1 - Math.pow(1 - a, k)
+// Never apply these per-frame values at a higher tick rate without scaling.
+// =============================================================================
+const PHYSICS = {
+    // --- Planted driving (must match main's on-screen speed within ~10%) ---
+    accel: 0.10,              // forward accel along heading, px per 60Hz frame
+    maxSpeed: 4.75,           // hard cap, px per 60Hz frame
+    gripFriction: 0.97,       // linear damping while planted
+    turnRate: 0.06,           // heading yaw at maxSpeed, rad per 60Hz frame
+    minSteerSpeed: 0.5,       // no steering below this speed
+    gripAlign: 0.85,          // how fast velocity snaps to heading when planted
+
+    // --- Drift (space / mobile hold): heading and velocity stay separate ---
+    driftTurnRate: 0.09,      // yaw while drifting, rad per 60Hz frame at maxSpeed
+    driftFriction: 0.97,      // keep near planted damping so speed doesn't cliff
+    driftBleed: 0.992,        // extra per-frame speed scrub while sliding
+    driftMinSpeed: 2.0,       // must be moving to break the rear loose
+    driftAlign: 0.06,         // weak velocity follow → tail steps out
+    counterAlign: 0.06,       // keep velocity lag while holding a slide
+    holdTurnRate: 0.16,       // yaw cap while countersteering so heading can track a holdable slip
+    driftAccelMix: 0.22,      // while drifting, this much throttle follows heading (rest follows velocity)
+    gripRecoverTime: 0.25,    // seconds to restore planted grip after release
+    targetSlip: 0.52,         // ~30 deg — holdable slide with countersteer
+    maxSlip: 0.61,            // ~35 deg hard cap; prevents spin-outs
+    minVisibleSlip: 0.35,     // ~20 deg — target lower bound of a held slide
+
+    // --- Track collisions (uses real centerline + trackWidth, not a box) ---
+    wallRestitution: 0.35,    // reflected normal speed fraction
+    wallSpeedKeep: 0.55,      // keep this much speed after a wall hit
+    wallShake: 10,            // screen-shake intensity on contact
+    wallInset: 0.5,           // stay this many px inside the track edge
+
+    // --- Audio: all gains capped ~0.12, short ramps, no stacking ---
+    gainCap: 0.12,
+    clipGain: 0.08,
+    wallGain: 0.08,
+    startGain: 0.08,
+    endGain: 0.07,
+    comboBreakGain: 0.055,
+    driftGain: 0.03
+};
 
 // Game state
 let gameState = 'ready'; // 'ready', 'playing', 'ended'
@@ -16,6 +64,7 @@ let firstRun = !localStorage.getItem('paper86-played');
 let screenShake = { x: 0, y: 0, intensity: 0 };
 let currentLayout = 0;
 let comboDecayWarning = false;
+let lastFrameTime = 0;
 
 // Daily track and stats
 let todayDateString = '';
@@ -32,6 +81,8 @@ let audioMuted = localStorage.getItem('paper86-muted') === 'true';
 let driftOscillator = null;
 let driftGain = null;
 let driftFilter = null;
+let activeAudioNodes = []; // oscillators / buffer sources still ringing
+let lastWallSoundAt = 0;
 
 // Input state
 const keys = {};
@@ -51,20 +102,10 @@ const car = {
     speed: 0,
     slipAngle: 0,
     slipRecoveryTimer: 0,
+    gripBlend: 1, // 1 = planted, 0 = full drift
     width: 20,
     height: 36
 };
-
-// Physics constants
-const ACCELERATION = 0.10;
-const MAX_SPEED = 4.75;
-const FRICTION = 0.97;
-const TURN_SPEED = 0.06;
-const DRIFT_TURN_SPEED = 0.09;
-const DRIFT_FRICTION = 0.94;
-const GRIP_FRICTION = 0.88;
-const DRIFT_SPEED_BLEED = 0.97; // Speed loss while drifting
-const SLIP_RECOVERY_TIME = 0.2; // Time to snap velocity to heading
 
 // Camera
 const camera = {
@@ -95,92 +136,124 @@ function initAudioContext() {
     }
 }
 
-function playSound(type, comboCount = 0) {
+function capGain(value) {
+    return Math.min(Math.max(value, 0), PHYSICS.gainCap);
+}
+
+function trackAudioNode(node, stopAt) {
+    activeAudioNodes.push({ node, stopAt });
+    node.onended = () => {
+        activeAudioNodes = activeAudioNodes.filter(n => n.node !== node);
+    };
+}
+
+function pruneAudioNodes(now) {
+    activeAudioNodes = activeAudioNodes.filter(n => n.stopAt > now);
+}
+
+function playPitchedTone({ type = 'sine', freqFrom, freqTo, peakGain, attack = 0.02, duration, curve = 'exp' }) {
     if (audioMuted || !audioContext) return;
     
     const now = audioContext.currentTime;
+    pruneAudioNodes(now);
+    
+    const osc = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    osc.type = type;
+    osc.connect(gain);
+    gain.connect(audioContext.destination);
+    
+    osc.frequency.setValueAtTime(freqFrom, now);
+    if (freqTo !== undefined && freqTo !== freqFrom) {
+        osc.frequency.exponentialRampToValueAtTime(Math.max(freqTo, 1), now + duration);
+    }
+    
+    const peak = capGain(peakGain);
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(peak, now + attack);
+    if (curve === 'linear') {
+        gain.gain.linearRampToValueAtTime(0, now + duration);
+    } else {
+        gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+    }
+    
+    osc.start(now);
+    osc.stop(now + duration + 0.02);
+    trackAudioNode(osc, now + duration + 0.02);
+}
+
+function playSound(type, comboCount = 0) {
+    if (audioMuted || !audioContext) return;
     
     if (type === 'clip') {
-        // CLIP blip that rises in pitch with combo
-        const osc = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        
-        osc.connect(gain);
-        gain.connect(audioContext.destination);
-        
-        const baseFreq = 400 + (comboCount * 50);
-        osc.frequency.setValueAtTime(baseFreq, now);
-        
-        gain.gain.setValueAtTime(0.08, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
-        
-        osc.start(now);
-        osc.stop(now + 0.15);
+        playPitchedTone({
+            freqFrom: 400 + (comboCount * 50),
+            peakGain: PHYSICS.clipGain,
+            attack: 0.01,
+            duration: 0.15
+        });
     } else if (type === 'wall') {
-        // Wall hit - harsh burst
-        const osc = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        
-        osc.connect(gain);
-        gain.connect(audioContext.destination);
-        
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(100, now);
-        osc.frequency.exponentialRampToValueAtTime(50, now + 0.2);
-        
-        gain.gain.setValueAtTime(0.15, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
-        
-        osc.start(now);
-        osc.stop(now + 0.2);
+        // Soft thump — no sawtooth burst, and don't stack on top of a recent hit
+        const now = audioContext ? audioContext.currentTime : 0;
+        if (now - lastWallSoundAt < 0.12) return;
+        lastWallSoundAt = now;
+        playPitchedTone({
+            type: 'triangle',
+            freqFrom: 140,
+            freqTo: 70,
+            peakGain: PHYSICS.wallGain,
+            attack: 0.012,
+            duration: 0.16
+        });
     } else if (type === 'start') {
-        // Start cue - rising tone
-        const osc = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        
-        osc.connect(gain);
-        gain.connect(audioContext.destination);
-        
-        osc.frequency.setValueAtTime(300, now);
-        osc.frequency.exponentialRampToValueAtTime(600, now + 0.3);
-        
-        gain.gain.setValueAtTime(0.1, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
-        
-        osc.start(now);
-        osc.stop(now + 0.3);
+        playPitchedTone({
+            freqFrom: 300,
+            freqTo: 560,
+            peakGain: PHYSICS.startGain,
+            attack: 0.04,
+            duration: 0.28
+        });
     } else if (type === 'end') {
-        // End cue - falling tone
-        const osc = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        
-        osc.connect(gain);
-        gain.connect(audioContext.destination);
-        
-        osc.frequency.setValueAtTime(600, now);
-        osc.frequency.exponentialRampToValueAtTime(200, now + 0.5);
-        
-        gain.gain.setValueAtTime(0.1, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
-        
-        osc.start(now);
-        osc.stop(now + 0.5);
+        // Soft falling sine, linear fade, no harsh drop
+        playPitchedTone({
+            type: 'sine',
+            freqFrom: 420,
+            freqTo: 220,
+            peakGain: PHYSICS.endGain,
+            attack: 0.05,
+            duration: 0.4,
+            curve: 'linear'
+        });
     } else if (type === 'combo-break') {
-        // Combo break - descending chirp
-        const osc = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        
-        osc.connect(gain);
-        gain.connect(audioContext.destination);
-        
-        osc.frequency.setValueAtTime(800, now);
-        osc.frequency.exponentialRampToValueAtTime(200, now + 0.25);
-        
-        gain.gain.setValueAtTime(0.06, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
-        
-        osc.start(now);
-        osc.stop(now + 0.25);
+        playPitchedTone({
+            freqFrom: 640,
+            freqTo: 220,
+            peakGain: PHYSICS.comboBreakGain,
+            attack: 0.01,
+            duration: 0.22
+        });
+    }
+}
+
+function stopAllAudio({ playEndCue = false } = {}) {
+    if (driftOscillator) {
+        stopDriftSound();
+    }
+    
+    if (audioContext) {
+        const now = audioContext.currentTime;
+        activeAudioNodes.forEach(({ node }) => {
+            try {
+                node.stop(now);
+            } catch (e) {
+                // already stopped
+            }
+        });
+        activeAudioNodes = [];
+    }
+    
+    if (playEndCue) {
+        playSound('end');
     }
 }
 
@@ -204,8 +277,8 @@ function startDriftSound() {
     // Low-pass filter for tire hiss character
     driftFilter = audioContext.createBiquadFilter();
     driftFilter.type = 'lowpass';
-    driftFilter.frequency.setValueAtTime(1200, now);
-    driftFilter.Q.setValueAtTime(0.5, now);
+    driftFilter.frequency.setValueAtTime(900, now);
+    driftFilter.Q.setValueAtTime(0.4, now);
     
     driftGain = audioContext.createGain();
     
@@ -214,33 +287,41 @@ function startDriftSound() {
     driftGain.connect(audioContext.destination);
     
     driftGain.gain.setValueAtTime(0, now);
-    driftGain.gain.linearRampToValueAtTime(0.035, now + 0.1);
+    driftGain.gain.linearRampToValueAtTime(capGain(PHYSICS.driftGain), now + 0.08);
     
     driftOscillator.start(now);
+    trackAudioNode(driftOscillator, now + 3600);
 }
 
 function stopDriftSound() {
     if (!driftOscillator || !audioContext) return;
     
     const now = audioContext.currentTime;
-    driftGain.gain.linearRampToValueAtTime(0, now + 0.1);
+    const osc = driftOscillator;
+    const gain = driftGain;
+    driftOscillator = null;
+    driftGain = null;
+    driftFilter = null;
     
-    setTimeout(() => {
-        if (driftOscillator) {
-            driftOscillator.stop();
-            driftOscillator = null;
-            driftGain = null;
-            driftFilter = null;
+    try {
+        if (gain) {
+            gain.gain.cancelScheduledValues(now);
+            const current = Math.max(gain.gain.value, 0.0001);
+            gain.gain.setValueAtTime(current, now);
+            gain.gain.linearRampToValueAtTime(0, now + 0.08);
         }
-    }, 150);
+        osc.stop(now + 0.09);
+    } catch (e) {
+        // already stopped
+    }
 }
 
 function toggleMute() {
     audioMuted = !audioMuted;
     localStorage.setItem('paper86-muted', audioMuted.toString());
     
-    if (audioMuted && driftOscillator) {
-        stopDriftSound();
+    if (audioMuted) {
+        stopAllAudio({ playEndCue: false });
     }
     
     // Update mute button
@@ -606,6 +687,7 @@ function startGame() {
 }
 
 function restart() {
+    stopAllAudio({ playEndCue: false });
     gameState = 'playing';
     score = 0;
     timeLeft = 60;
@@ -621,6 +703,7 @@ function restart() {
     car.speed = 0;
     car.slipAngle = 0;
     car.slipRecoveryTimer = 0;
+    car.gripBlend = 1;
     tireMarks.length = 0;
     particles.length = 0;
     clipPopups.length = 0;
@@ -659,20 +742,48 @@ function restart() {
     playSound('start');
 }
 
+function wrapAngle(a) {
+    while (a > Math.PI) a -= Math.PI * 2;
+    while (a < -Math.PI) a += Math.PI * 2;
+    return a;
+}
+
+function lerpFactor(perFrame, k) {
+    // Convert a 60Hz per-frame lerp into a dt-scaled equivalent
+    if (k <= 0) return 0;
+    return 1 - Math.pow(1 - perFrame, k);
+}
+
 function updateCar(dt) {
     if (gameState !== 'playing') return;
     
-    const isDrifting = drifting || touchDrifting;
+    // k = 1 at 60Hz. Caps keep a stalled tab from exploding the sim.
+    if (dt > 0.05) dt = 0.05;
+    if (dt < 0) dt = 0;
+    const k = dt * 60;
+    
+    const holdingDrift = drifting || touchDrifting;
+    const isDrifting = holdingDrift && car.speed > PHYSICS.driftMinSpeed;
+    
+    // Blend grip: 0 while drifting, 1 when planted. Release restores over ~0.25s.
+    const gripTarget = isDrifting ? 0 : 1;
+    if (isDrifting) {
+        car.gripBlend = 0;
+    } else if (PHYSICS.gripRecoverTime > 0) {
+        car.gripBlend = Math.min(1, car.gripBlend + dt / PHYSICS.gripRecoverTime);
+    } else {
+        car.gripBlend = gripTarget;
+    }
     
     // Track drift time
-    if (isDrifting && car.speed > 2) {
+    if (isDrifting) {
         runStats.driftTime += dt;
     }
     
     // Handle drift sound
-    if (isDrifting && car.speed > 2 && !driftOscillator) {
+    if (isDrifting && !driftOscillator) {
         startDriftSound();
-    } else if ((!isDrifting || car.speed <= 2) && driftOscillator) {
+    } else if (!isDrifting && driftOscillator) {
         stopDriftSound();
     }
     
@@ -681,88 +792,106 @@ function updateCar(dt) {
     if (keys['arrowleft'] || keys['a'] || touchSteerLeft) steerInput -= 1;
     if (keys['arrowright'] || keys['d'] || touchSteerRight) steerInput += 1;
     
-    // Update heading (car's facing direction) based on steering
-    if (steerInput !== 0 && car.speed > 0.5) {
-        const turnSpeed = isDrifting ? DRIFT_TURN_SPEED : TURN_SPEED;
-        const turnAmount = turnSpeed * steerInput * (car.speed / MAX_SPEED);
-        car.heading += turnAmount;
+    const speedRatio = car.speed / PHYSICS.maxSpeed;
+    const canSteer = steerInput !== 0 && car.speed > PHYSICS.minSteerSpeed;
+    const slipSign = Math.sign(car.slipAngle);
+    const isCounter = isDrifting && canSteer && slipSign !== 0 && Math.sign(steerInput) !== slipSign;
+    
+    // Heading is independent of velocity. Planted: yaw at Andrew's turn rate.
+    // Drift + steer into the slide: yaw faster so the tail steps out.
+    // Drift + countersteer: hold heading near velocity ± targetSlip, then catch.
+    if (canSteer) {
+        if (isDrifting && isCounter && Math.abs(car.slipAngle) > 0.08) {
+            const desiredHeading = car.velocityAngle + slipSign * PHYSICS.targetSlip;
+            const err = wrapAngle(desiredHeading - car.heading);
+            const maxTurn = PHYSICS.holdTurnRate * k;
+            car.heading += Math.max(-maxTurn, Math.min(maxTurn, err));
+        } else {
+            const turnSpeed = isDrifting ? PHYSICS.driftTurnRate : PHYSICS.turnRate;
+            car.heading += turnSpeed * steerInput * speedRatio * k;
+        }
     }
     
-    // Acceleration (always accelerating forward along heading)
-    const accel = ACCELERATION;
-    car.vx += Math.cos(car.heading) * accel;
-    car.vy += Math.sin(car.heading) * accel;
+    // Acceleration. Planted: along heading (matches main). Drifting: mostly
+    // along velocity so throttle doesn't yank the car out of a slide.
+    const velAngle = car.speed > 0.1 ? car.velocityAngle : car.heading;
+    const accelMix = isDrifting ? PHYSICS.driftAccelMix : 1;
+    let ax = Math.cos(car.heading) * accelMix + Math.cos(velAngle) * (1 - accelMix);
+    let ay = Math.sin(car.heading) * accelMix + Math.sin(velAngle) * (1 - accelMix);
+    const aLen = Math.hypot(ax, ay) || 1;
+    car.vx += (ax / aLen) * PHYSICS.accel * k;
+    car.vy += (ay / aLen) * PHYSICS.accel * k;
     
-    // Calculate speed and velocity angle
+    // Speed and velocity angle
     car.speed = Math.sqrt(car.vx * car.vx + car.vy * car.vy);
     if (car.speed > 0.1) {
         car.velocityAngle = Math.atan2(car.vy, car.vx);
     }
     
-    // Calculate slip angle (difference between heading and velocity)
-    let slipAngle = car.heading - car.velocityAngle;
-    // Normalize to -PI to PI
-    while (slipAngle > Math.PI) slipAngle -= Math.PI * 2;
-    while (slipAngle < -Math.PI) slipAngle += Math.PI * 2;
-    car.slipAngle = slipAngle;
+    // Slip = heading − travel direction (positive = tail left / nose right)
+    car.slipAngle = wrapAngle(car.heading - car.velocityAngle);
     
-    // Apply friction and drift mechanics
-    if (isDrifting && car.speed > 2) {
-        // Drifting: rear slips out, speed bleeds
-        car.vx *= DRIFT_FRICTION * DRIFT_SPEED_BLEED;
-        car.vy *= DRIFT_FRICTION * DRIFT_SPEED_BLEED;
-        
-        // Counter-steering helps recover
-        if (Math.sign(steerInput) !== Math.sign(slipAngle) && steerInput !== 0) {
-            // Counter-steering: help align velocity toward heading
-            const recoveryFactor = 0.15;
-            const targetVx = Math.cos(car.heading) * car.speed;
-            const targetVy = Math.sin(car.heading) * car.speed;
-            car.vx += (targetVx - car.vx) * recoveryFactor;
-            car.vy += (targetVy - car.vy) * recoveryFactor;
-        }
-        
-        // Add tire marks when slip is meaningful
-        if (Math.abs(slipAngle) > 0.15 && tireMarks.length < MAX_TIRE_MARKS && Math.random() > 0.3) {
-            const offsetDist = 10;
-            tireMarks.push({
-                x: car.x - Math.sin(car.heading) * offsetDist,
-                y: car.y + Math.cos(car.heading) * offsetDist,
-                angle: car.velocityAngle + (Math.random() - 0.5) * 0.3,
-                alpha: 0.8
-            });
-        }
-        
-        car.slipRecoveryTimer = 0;
-    } else {
-        // Not drifting: snap velocity toward heading
-        car.vx *= FRICTION;
-        car.vy *= FRICTION;
-        
-        if (Math.abs(slipAngle) > 0.05 && car.speed > 0.5) {
-            // Strongly align velocity to heading when not drifting (grip mode)
-            const gripFactor = 0.85;
-            const targetVx = Math.cos(car.heading) * car.speed;
-            const targetVy = Math.sin(car.heading) * car.speed;
-            car.vx += (targetVx - car.vx) * gripFactor;
-            car.vy += (targetVy - car.vy) * gripFactor;
-        }
-        
-        car.slipRecoveryTimer = 0;
+    // Hard cap: heading cannot run more than maxSlip ahead of velocity (no spin-outs)
+    if (Math.abs(car.slipAngle) > PHYSICS.maxSlip) {
+        car.heading = car.velocityAngle + Math.sign(car.slipAngle) * PHYSICS.maxSlip;
+        car.slipAngle = wrapAngle(car.heading - car.velocityAngle);
     }
     
-    // Limit max speed
+    // Linear damping
+    let friction = PHYSICS.gripFriction;
+    if (isDrifting) {
+        friction = PHYSICS.driftFriction * PHYSICS.driftBleed;
+    }
+    const damp = Math.pow(friction, k);
+    car.vx *= damp;
+    car.vy *= damp;
+    
+    // Align velocity toward heading. Weak while drifting (tail stays out),
+    // strong when planted. Blend on release so grip comes back smoothly.
+    let alignPerFrame = PHYSICS.gripAlign * car.gripBlend + PHYSICS.driftAlign * (1 - car.gripBlend);
+    if (isCounter) {
+        alignPerFrame = Math.max(alignPerFrame, PHYSICS.counterAlign);
+    }
+    const align = lerpFactor(alignPerFrame, k);
+    
     car.speed = Math.sqrt(car.vx * car.vx + car.vy * car.vy);
-    if (car.speed > MAX_SPEED) {
-        const scale = MAX_SPEED / car.speed;
+    if (car.speed > 0.1 && (isDrifting || Math.abs(car.slipAngle) > 0.02 || car.gripBlend < 1)) {
+        const targetVx = Math.cos(car.heading) * car.speed;
+        const targetVy = Math.sin(car.heading) * car.speed;
+        car.vx += (targetVx - car.vx) * align;
+        car.vy += (targetVy - car.vy) * align;
+    }
+    
+    // Tire marks while sliding
+    if (isDrifting && Math.abs(car.slipAngle) > 0.15 && tireMarks.length < MAX_TIRE_MARKS && Math.random() > 0.3) {
+        const offsetDist = 10;
+        tireMarks.push({
+            x: car.x - Math.sin(car.heading) * offsetDist,
+            y: car.y + Math.cos(car.heading) * offsetDist,
+            angle: car.velocityAngle + (Math.random() - 0.5) * 0.3,
+            alpha: 0.8
+        });
+    }
+    
+    car.slipRecoveryTimer = isDrifting ? 0 : Math.min(PHYSICS.gripRecoverTime, car.slipRecoveryTimer + dt);
+    
+    // Limit max speed (same cap as main)
+    car.speed = Math.sqrt(car.vx * car.vx + car.vy * car.vy);
+    if (car.speed > PHYSICS.maxSpeed) {
+        const scale = PHYSICS.maxSpeed / car.speed;
         car.vx *= scale;
         car.vy *= scale;
-        car.speed = MAX_SPEED;
+        car.speed = PHYSICS.maxSpeed;
     }
     
-    // Update position
-    car.x += car.vx;
-    car.y += car.vy;
+    if (car.speed > 0.1) {
+        car.velocityAngle = Math.atan2(car.vy, car.vx);
+        car.slipAngle = wrapAngle(car.heading - car.velocityAngle);
+    }
+    
+    // Position: vx is still "px per 60Hz frame", so multiply by k
+    car.x += car.vx * k;
+    car.y += car.vy * k;
     
     // Record ghost data
     recordingTimer += dt;
@@ -783,20 +912,21 @@ function updateCar(dt) {
     checkCones();
     
     // Fade tire marks
+    const tireFade = Math.pow(0.995, k);
     tireMarks.forEach(mark => {
-        mark.alpha *= 0.995;
+        mark.alpha *= tireFade;
     });
     tireMarks.splice(0, tireMarks.filter(m => m.alpha < 0.1).length);
     
     // Update particles
-    updateParticles(dt);
+    updateParticles(dt, k);
     
     // Update CLIP popups
     updateClipPopups(dt);
     
     // Update screen shake
     if (screenShake.intensity > 0) {
-        screenShake.intensity *= 0.85;
+        screenShake.intensity *= Math.pow(0.85, k);
         if (screenShake.intensity < 0.1) {
             screenShake.intensity = 0;
             screenShake.x = 0;
@@ -808,13 +938,13 @@ function updateCar(dt) {
     }
 }
 
-function updateParticles(dt) {
+function updateParticles(dt, k = dt * 60) {
     for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
-        p.x += p.vx;
-        p.y += p.vy;
-        p.vy += 0.2; // Gravity
-        p.vx *= 0.98;
+        p.x += p.vx * k;
+        p.y += p.vy * k;
+        p.vy += 0.2 * k; // Gravity
+        p.vx *= Math.pow(0.98, k);
         p.life -= dt;
         p.alpha = p.life / p.maxLife;
         
@@ -876,47 +1006,109 @@ function addClipPopup(x, y, comboCount, text = 'CLIP') {
     });
 }
 
-function checkCollisions() {
-    // Check if car is on track (only after grace period)
-    if (collisionGraceTime <= 0 && !isOnTrack(car.x, car.y)) {
-        screenShake.intensity = 15;
-        playSound('wall');
-        endGame('crash');
-    }
-}
-
-function isOnTrack(x, y) {
-    // Find closest point on track centerline
+function closestTrackPoint(x, y) {
+    // Nearest point on the closed centerline polyline (the real track, not a box)
     let minDist = Infinity;
+    let nearestX = x;
+    let nearestY = y;
     
     for (let i = 0; i < trackPoints.length; i++) {
         const p1 = trackPoints[i];
         const p2 = trackPoints[(i + 1) % trackPoints.length];
-        
-        const dist = distanceToSegment(x, y, p1.x, p1.y, p2.x, p2.y);
-        minDist = Math.min(minDist, dist);
+        const hit = closestPointOnSegment(x, y, p1.x, p1.y, p2.x, p2.y);
+        if (hit.dist < minDist) {
+            minDist = hit.dist;
+            nearestX = hit.x;
+            nearestY = hit.y;
+        }
     }
     
-    return minDist < trackWidth / 2;
+    return { dist: minDist, x: nearestX, y: nearestY };
 }
 
-function distanceToSegment(px, py, x1, y1, x2, y2) {
+function closestPointOnSegment(px, py, x1, y1, x2, y2) {
     const dx = x2 - x1;
     const dy = y2 - y1;
     const len2 = dx * dx + dy * dy;
     
-    if (len2 === 0) return Math.hypot(px - x1, py - y1);
+    if (len2 === 0) {
+        return { x: x1, y: y1, dist: Math.hypot(px - x1, py - y1) };
+    }
     
     let t = ((px - x1) * dx + (py - y1) * dy) / len2;
     t = Math.max(0, Math.min(1, t));
     
-    const nearestX = x1 + t * dx;
-    const nearestY = y1 + t * dy;
+    const nx = x1 + t * dx;
+    const ny = y1 + t * dy;
+    return { x: nx, y: ny, dist: Math.hypot(px - nx, py - ny) };
+}
+
+function trackClearance(x, y) {
+    // Positive = on track, 0 = on the edge, negative = off
+    return trackWidth / 2 - closestTrackPoint(x, y).dist;
+}
+
+function resolveTrackCollision() {
+    const info = closestTrackPoint(car.x, car.y);
+    const halfW = trackWidth / 2;
     
-    return Math.hypot(px - nearestX, py - nearestY);
+    if (info.dist <= halfW - PHYSICS.wallInset) {
+        return false;
+    }
+    
+    // Outward normal from the centerline through the car
+    let ox = car.x - info.x;
+    let oy = car.y - info.y;
+    const len = Math.hypot(ox, oy);
+    if (len < 1e-6) {
+        ox = 1;
+        oy = 0;
+    } else {
+        ox /= len;
+        oy /= len;
+    }
+    
+    // Push back onto the track so the car can never leave the play area
+    const inset = halfW - PHYSICS.wallInset;
+    car.x = info.x + ox * inset;
+    car.y = info.y + oy * inset;
+    
+    // Reflect the outward velocity component and scrub speed
+    const vn = car.vx * ox + car.vy * oy;
+    if (vn > 0) {
+        car.vx -= (1 + PHYSICS.wallRestitution) * vn * ox;
+        car.vy -= (1 + PHYSICS.wallRestitution) * vn * oy;
+    }
+    car.vx *= PHYSICS.wallSpeedKeep;
+    car.vy *= PHYSICS.wallSpeedKeep;
+    car.speed = Math.hypot(car.vx, car.vy);
+    if (car.speed > 0.1) {
+        car.velocityAngle = Math.atan2(car.vy, car.vx);
+    }
+    
+    return true;
+}
+
+function checkCollisions() {
+    const hit = resolveTrackCollision();
+    if (!hit) return;
+    
+    // Always shake and stay in-bounds. After the start grace, a wall still ends the run.
+    if (collisionGraceTime <= 0) {
+        screenShake.intensity = PHYSICS.wallShake;
+        endGame('crash');
+    } else {
+        screenShake.intensity = PHYSICS.wallShake * 0.6;
+        playSound('wall');
+    }
+}
+
+function isOnTrack(x, y) {
+    return closestTrackPoint(x, y).dist < trackWidth / 2;
 }
 
 function checkCones() {
+    if (gameState !== 'playing') return;
     const now = Date.now();
     const coneRadius = 15;
     const nearMissRadius = 45; // Larger radius for near-miss CLIP detection
@@ -996,12 +1188,11 @@ function checkCones() {
 }
 
 function endGame(reason = 'timeout') {
+    if (gameState === 'ended') return;
     gameState = 'ended';
-    playSound('end');
     
-    if (driftOscillator) {
-        stopDriftSound();
-    }
+    // Kill drift / stacked tones first, then a single soft end cue
+    stopAllAudio({ playEndCue: true });
     
     const finalScore = Math.floor(score);
     const oldBestScore = bestScore;
@@ -1483,8 +1674,13 @@ function updateHUD() {
     }
 }
 
-function gameLoop() {
-    const dt = 1 / 60;
+function gameLoop(timestamp) {
+    if (lastFrameTime === 0) lastFrameTime = timestamp || performance.now();
+    const now = timestamp || performance.now();
+    let dt = (now - lastFrameTime) / 1000;
+    lastFrameTime = now;
+    if (dt > 0.05) dt = 0.05;
+    if (dt < 0) dt = 0;
     
     if (gameState === 'playing') {
         // Update timer
